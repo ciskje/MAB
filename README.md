@@ -203,6 +203,53 @@ Inoltre:
 - viene eseguito un rendering di anteprima a risoluzione ridotta durante l'interazione
 - il rendering completo avviene dopo un breve ritardo per mantenere la UI reattiva
 
+## Ottimizzazioni implementate (Build 1.0.0)
+
+Questa versione include numerose ottimizzazioni per migliorare le performance di calcolo e rendering:
+
+### 1. Kernel Mandelbrot ottimizzato senza indicizzazione esplicita
+- **Prima**: Utilizzo di `torch.nonzero()` per identificare i punti attivi, con creazione di tensori temporanei e overhead di indicizzazione avanzata
+- **Ora**: Maschere booleane dirette che operano sull'intero tensore in modo vettorizzato
+- **Vantaggio**: Eliminazione dell'overhead di creazione di tensori indice e riduzione delle operazioni di memoria
+
+### 2. Palette precaricata e cached sul device
+- **Prima**: Generazione della palette RGB su CPU ad ogni frame, con successivo trasferimento sulla GPU
+- **Ora**: Palette generata una sola volta all'avvio e mantenuta come tensore PyTorch sul device (GPU o CPU)
+- **Vantaggio**: Eliminazione del costo di generazione ripetuta e dei trasferimenti CPU→GPU per la palette
+
+### 3. Colorizzazione completamente vettorizzata su GPU
+- **Prima**: Metodo `_colorize` basato su NumPy che richiedeva trasferimento dati GPU→CPU, elaborazione su CPU, e ritorno GPU
+- **Ora**: Tutta la colorizzazione avviene sul device con operazioni tensoriali PyTorch native
+- **Vantaggio**: 
+  - Nessun trasferimento intermedio CPU-GPU durante il rendering
+  - Sfruttamento completo della parallelizzazione GPU
+  - Operazioni di masking e indexing totalmente vettorizzate
+
+### 4. Minimizzazione dei trasferimenti CPU-GPU
+- **Prima**: Multipli trasferimenti di dati tra CPU e GPU durante il ciclo di rendering
+- **Ora**: I dati rimangono sul device per tutto il ciclo di calcolo; solo il risultato finale (immagine RGBA) è trasferito su CPU per tkinter
+- **Vantaggio**: Riduzione significativa della latenza di memoria PCIe
+
+### 5. Caching intelligente della griglia complessa
+- **Prima**: Ricalcolo completo della griglia dei numeri complessi `c` ad ogni frame, anche quando solo le iterazioni cambiavano
+- **Ora**: La griglia `c` è ricalcolata solo quando cambiano i parametri geometrici (centro, ampiezza, risoluzione)
+- **Vantaggio**: Risparmio computazionale durante regolazioni fini delle iterazioni o cambio precisione
+
+### 6. Gestione efficiente della precisione doppia
+- Supporto nativo per `float64/complex128` senza conversioni implicite
+- Allocazione memory-aware per evitare frammentazione
+- dtype checking ottimizzato per prevenire cast non necessari
+
+### 7. Batch processing ottimizzato
+- Le iterazioni del Mandelbrot sono eseguite in batch unici invece che con loop Python
+- Masking progressivo per eliminare i punti già divergenti senza uscire dal kernel GPU
+
+### Risultati attesi
+- **GPU CUDA**: Speedup 5-20x rispetto alla versione non ottimizzata, specialmente ad alte risoluzioni (>1000px) e alto numero di iterazioni (>500)
+- **CPU multi-core**: Speedup 2-5x grazie alla migliore vettorizzazione e riduzione dell'overhead
+- **Latenza**: Riduzione del 50-80% nel tempo di rendering per frame
+- **Memoria**: Minore pressione sulla RAM grazie al caching e alla riduzione di tensori temporanei
+
 ## Note tecniche
 
 Il programma usa:
