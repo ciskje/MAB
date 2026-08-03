@@ -49,9 +49,19 @@ Installazione consigliata:
 pip install torch numpy
 ```
 
+Attenzione importante: con l'installazione standard di PyTorch da PyPI, in molti casi si ottiene una build CPU-only. In altre parole, `pip install torch` non garantisce che la GPU CUDA sia disponibile.
+
+Per usare CUDA, devi installare la build corretta per la tua versione di CUDA, di solito dal repository ufficiale di PyTorch, ad esempio:
+
+```bash
+pip install --index-url https://download.pytorch.org/whl/cu121 torch numpy
+```
+
+Se il tuo ambiente usa un repository interno o un mirror Python (ad esempio Nexus/Artifactory), puoi usare anche quel mirror, ma devi assicurarti che esponga i wheel CUDA corretti e non solo la versione CPU.
+
 Nota:
-- Se la macchina dispone di una GPU NVIDIA con CUDA supportato, PyTorch può usare la GPU automaticamente
-- In assenza di CUDA, il programma usa la CPU con calcolo multi-thread
+- Se la macchina dispone di una GPU NVIDIA con CUDA supportato e hai installato il wheel CUDA corretto, PyTorch può usare la GPU automaticamente.
+- In assenza di CUDA, il programma usa la CPU con calcolo multi-thread.
 
 ## Avvio
 
