@@ -1,11 +1,32 @@
 # ============================================================================
 # Insieme di Mandelbrot - visualizzatore interattivo
-# VERSIONE: 4.2.0
+# VERSIONE: 4.5.0
 # ----------------------------------------------------------------------------
 # REGOLA: ogni modifica incrementa la versione e aggiunge una voce qui sotto
 # (formato: versione - data - descrizione modifiche).
 #
 # STORICO:
+# 4.5.0 - 2026-08-29
+#   - Barra di stato: tolto "centro" e "meta-larghezza", aggiunto il tempo di
+#     rendering (misurato nel worker attorno a compute(), es. "render: 120 ms")
+#   - Config persistente: tutti i settaggi (vista cx/cy/half, iterazioni, auto,
+#     precisione, palette, motore) salvati e ricaricati da
+#     %USERPROFILE%\mandelbrot\config.json a ogni esecuzione (salvataggio all'uscita
+#     + throttled ~1s sui cambiamenti)
+#   - Tasto "Reset": riporta vista + tutti i settaggi ai default, salva config
+#   - Benchmark standardizzato (tasto "Benchmark"): regione fissa
+#     c=(-0.74364388703, 0.13182590421i), meta=0.002, 3000 iter, 960x540,
+#     ripetuta per 8 s in thread dedicato (buffer proprio, niente contesa con il
+#     render normale); dialog finale con numero di ripetizioni, rate e ms/render
+#   - compute_gpu/compute accettano un buffer opzionale (evita contesa su _BUF)
+# 4.4.0 - 2026-08-29
+#   - Auto-iterazioni raddoppiate: mi = 400 * (1 + log10(HALF0/half)),
+#     clamp [50, 10000] (era 200 * (1 + log10(...)), clamp [50, 5000])
+#   - Pulsanti manuali iterazioni: passo da +/-100 a +/-1000
+# 4.3.0 - 2026-08-29
+#   - UI: controlli, etichette, pulsanti -100/+100 e menu ingranditi (font
+#     TkDefaultFont/TkTextFont/TkMenuFont a 13pt) + pady=3 sui controlli in alto
+#     per area cliccabile piu ampia
 # 4.2.0 - 2026-08-29
 #   - Modalita "double" (precisione f64) disattivabile: kernel CUDA generati
 #     in due varianti (float32/float64) dalla stessa sorgente parametrizzata;
@@ -45,15 +66,28 @@
 # ============================================================================
 
 import tkinter as tk
+import tkinter.filedialog
+import tkinter.messagebox
+import tkinter.font as tkfont
 import threading
 import queue
 import math
+import os
+import json
+import time
 import numpy as np
 from PIL import Image, ImageTk
 
 INIT_W, INIT_H = 960, 540
 CX0, CY0, HALF0 = -0.5, 0.0, 1.5
 MI0 = 200
+
+# Config salvata/caricata a ogni esecuzione (vista + tutti i settaggi)
+CONFIG_PATH = os.path.join(os.path.expanduser("~"), "mandelbrot", "config.json")
+
+# Benchmark standardizzato: regione fissa, >=3000 iterazioni, risoluzione fissa
+BENCH = dict(cx=-0.74364388703, cy=0.13182590421, half=0.002,
+             mi=3000, w=960, h=540, secs=8.0)
 
 # ---------------- Palette (LUT 256x3 condivisa CPU/GPU) ----------------
 _FIRE = (
@@ -202,12 +236,14 @@ def set_prec(p):
 def prec():
     return _PREC
 
-def compute_gpu(cx, cy, half, w, h, mi):
+def compute_gpu(cx, cy, half, w, h, mi, buf=None):
     global _BUF
     need = w * h * 3
-    if _BUF is None or _BUF.size < need:
-        _BUF = cp.empty((need,), dtype=cp.uint8)
-    out = _BUF[:need]
+    if buf is None:
+        if _BUF is None or _BUF.size < need:
+            _BUF = cp.empty((need,), dtype=cp.uint8)
+        buf = _BUF
+    out = buf[:need]
     bx, by = 16, 16
     grid = ((w + 2 * bx - 1) // (2 * bx), (h + by - 1) // by)
     pal = 1 if _PALETTE == "ghiaccio" else 0
@@ -258,14 +294,21 @@ def backend():
         return "CUDA " + _PREC
     return "CPU f64"
 
-def compute(cx, cy, half, w, h, mi):
+def compute(cx, cy, half, w, h, mi, buf=None):
     if _USE_GPU:
-        return compute_gpu(cx, cy, half, w, h, mi)
+        return compute_gpu(cx, cy, half, w, h, mi, buf=buf)
     return compute_cpu(cx, cy, half, w, h, mi)
 
 class MandelbrotApp:
     def __init__(self, root):
         self.root = root
+        # UI piu leggibile: ingrandisce font default di tutti i widget (checkbutton,
+        # etichette, pulsanti, menu) preservando la famiglia nativa
+        for _fn in ("TkDefaultFont", "TkTextFont", "TkMenuFont"):
+            try:
+                tkfont.nametofont(_fn).config(size=13)
+            except Exception:
+                pass
         root.title(f"Insieme di Mandelbrot - {backend()}")
         self.cx, self.cy, self.half = CX0, CY0, HALF0
         self.mi = MI0
@@ -278,9 +321,9 @@ class MandelbrotApp:
         bk.pack(side="left", padx=(8, 12))
         tk.Label(bk, text="motore:").pack(side="left")
         self.cpu_btn = tk.Checkbutton(bk, text="CPU", command=lambda: self.set_backend("cpu"))
-        self.cpu_btn.pack(side="left", padx=2)
+        self.cpu_btn.pack(side="left", padx=2, pady=3)
         self.cuda_btn = tk.Checkbutton(bk, text="CUDA", command=lambda: self.set_backend("cuda"))
-        self.cuda_btn.pack(side="left", padx=2)
+        self.cuda_btn.pack(side="left", padx=2, pady=3)
         if _GPU:
             self.cuda_btn.select()
         else:
@@ -290,17 +333,17 @@ class MandelbrotApp:
         pl.pack(side="left", padx=12)
         tk.Label(pl, text="palette:").pack(side="left")
         self.fire_btn = tk.Checkbutton(pl, text="Fuoco", command=lambda: self.choose_palette("fuoco"))
-        self.fire_btn.pack(side="left", padx=2)
+        self.fire_btn.pack(side="left", padx=2, pady=3)
         self.ice_btn = tk.Checkbutton(pl, text="Ghiaccio", command=lambda: self.choose_palette("ghiaccio"))
-        self.ice_btn.pack(side="left", padx=2)
+        self.ice_btn.pack(side="left", padx=2, pady=3)
         self.fire_btn.select()
         pc = tk.Frame(self.ctl)
         pc.pack(side="left", padx=12)
         tk.Label(pc, text="precisione:").pack(side="left")
         self.f32_btn = tk.Checkbutton(pc, text="f32", command=lambda: self.set_precision("f32"))
-        self.f32_btn.pack(side="left", padx=2)
+        self.f32_btn.pack(side="left", padx=2, pady=3)
         self.f64_btn = tk.Checkbutton(pc, text="f64", command=lambda: self.set_precision("f64"))
-        self.f64_btn.pack(side="left", padx=2)
+        self.f64_btn.pack(side="left", padx=2, pady=3)
         self.f32_btn.select()
         if not _GPU:
             self.f32_btn.config(state="disabled")
@@ -312,18 +355,22 @@ class MandelbrotApp:
         tk.Label(mif, text="iter:").pack(side="left")
         self.mi_auto_var = tk.BooleanVar(value=True)
         self.auto_btn = tk.Checkbutton(mif, text="auto", variable=self.mi_auto_var,
-                                       command=self.toggle_auto_mi)
-        self.auto_btn.pack(side="left", padx=2)
+                                        command=self.toggle_auto_mi)
+        self.auto_btn.pack(side="left", padx=2, pady=3)
         self.btns = tk.Frame(root)
         self.btns.pack(fill="x")
         self.mi_label = tk.Label(self.btns, text=f"iterazioni: {self.mi}")
-        self.mi_label.pack(side="left", padx=8)
-        self.mi_minus = tk.Button(self.btns, text="-100", command=lambda: self.change_mi(-100))
-        self.mi_minus.pack(side="left", padx=2)
-        self.mi_plus = tk.Button(self.btns, text="+100", command=lambda: self.change_mi(+100))
-        self.mi_plus.pack(side="left", padx=2)
+        self.mi_label.pack(side="left", padx=8, pady=3)
+        self.mi_minus = tk.Button(self.btns, text="-1000", command=lambda: self.change_mi(-1000))
+        self.mi_minus.pack(side="left", padx=2, pady=3)
+        self.mi_plus = tk.Button(self.btns, text="+1000", command=lambda: self.change_mi(+1000))
+        self.mi_plus.pack(side="left", padx=2, pady=3)
         self.mi_minus.config(state="disabled")
         self.mi_plus.config(state="disabled")
+        self.bench_btn = tk.Button(self.btns, text="Benchmark", command=self.run_benchmark)
+        self.bench_btn.pack(side="right", padx=(16, 8), pady=3)
+        self.reset_btn = tk.Button(self.btns, text="Reset", command=self.reset)
+        self.reset_btn.pack(side="right", padx=2, pady=3)
         # --- canvas al centro, status in fondo ---
         self.canvas.pack(fill="both", expand=True)
         self.status = tk.Label(root, text="render...")
@@ -333,9 +380,10 @@ class MandelbrotApp:
         self.mfile = tk.Menu(self.menu, tearoff=0)
         self.mfile.add_command(label="Salva immagine... (Ctrl+S)", command=self.save_png)
         self.mfile.add_separator()
-        self.mfile.add_command(label="Esci", command=root.destroy)
+        self.mfile.add_command(label="Esci", command=self.on_exit)
         self.menu.add_cascade(label="File", menu=self.mfile)
         root.config(menu=self.menu)
+        root.protocol("WM_DELETE_WINDOW", self.on_exit)
         self.root.bind("<Control-s>", lambda e: self.save_png())
         self.canvas.bind("<ButtonPress-1>", self.on_press)
         self.canvas.bind("<B1-Motion>", self.on_drag)
@@ -356,8 +404,16 @@ class MandelbrotApp:
         self._full_timer = None
         self._worker = threading.Thread(target=self._worker_loop, daemon=True)
         self._worker.start()
+        self._cfg_dirty = False
+        self._bench_running = False
+        self._bench_result = None
+        self._bench_finished = False
         self.root.after(30, self._poll)
-        self.request_render("iniziale")
+        self.root.after(1000, self._flush_config)
+        if self.load_config():
+            self.request_render("config caricata")
+        else:
+            self.request_render("iniziale")
 
     def canvas_size(self):
         w = self.canvas.winfo_width()
@@ -373,6 +429,7 @@ class MandelbrotApp:
 
     def request_render(self, msg):
         self._last_msg = msg
+        self._cfg_dirty = True
         self._update_mi_label()
         if self._full_timer is not None:
             self.root.after_cancel(self._full_timer)
@@ -402,10 +459,12 @@ class MandelbrotApp:
                 self._job = None
             view, w, h = job
             try:
+                t0 = time.perf_counter()
                 img = compute(view[0], view[1], view[2], w, h, view[3])
+                rt = time.perf_counter() - t0
             except Exception:
                 continue
-            self._frames.put((img, self._last_msg))
+            self._frames.put((img, self._last_msg, rt))
 
     def _poll(self):
         frame = None
@@ -415,10 +474,14 @@ class MandelbrotApp:
         except queue.Empty:
             pass
         if frame is not None:
-            self._show(frame[0], frame[1])
+            self._show(frame[0], frame[1], frame[2])
+        if self._bench_finished:
+            self._bench_finished = False
+            count, secs, err = self._bench_result
+            self._bench_done(count, secs, err)
         self.root.after(30, self._poll)
 
-    def _show(self, img, msg):
+    def _show(self, img, msg, rt=0.0):
         w, h = self.canvas_size()
         if img.size != (w, h):
             img = img.resize((w, h), Image.NEAREST)
@@ -426,7 +489,7 @@ class MandelbrotApp:
         self.photo = ImageTk.PhotoImage(img)
         self.canvas.delete("all")
         self.canvas.create_image(w // 2, h // 2, image=self.photo)
-        self.status.config(text=f"{msg} | {backend()} | palette: {_PALETTE} | centro: ({self.cx:.12f}, {self.cy:.12f}i) | meta-larghezza: {self.half:.3e}")
+        self.status.config(text=f"{msg} | {backend()} | palette: {_PALETTE} | render: {rt*1000:.0f} ms")
 
     def on_configure(self, e):
         if (e.width, e.height) == self._size:
@@ -440,7 +503,7 @@ class MandelbrotApp:
         if not self.mi_auto:
             return self.mi
         z = HALF0 / max(self.half, 1e-12)
-        return int(max(50, min(5000, MI0 * (1.0 + math.log10(z)))))
+        return int(max(50, min(10000, 2 * MI0 * (1.0 + math.log10(z)))))
 
     def _update_mi_label(self):
         if self.mi_auto:
@@ -506,6 +569,123 @@ class MandelbrotApp:
         except Exception as ex:
             self.status.config(text="errore salvataggio: " + str(ex))
 
+    # ---------------- config.json (salva/carica tutti i settaggi) ----------------
+    def save_config(self):
+        global _PREC, _PALETTE, _USE_GPU
+        c = dict(cx=self.cx, cy=self.cy, half=self.half,
+                 mi=self.mi, mi_auto=bool(self.mi_auto),
+                 precision=_PREC, palette=_PALETTE,
+                 backend=("cuda" if _USE_GPU else "cpu"))
+        try:
+            d = os.path.dirname(CONFIG_PATH)
+            if d:
+                os.makedirs(d, exist_ok=True)
+            with open(CONFIG_PATH, "w", encoding="utf-8") as f:
+                json.dump(c, f, indent=2)
+        except Exception:
+            pass
+
+    def load_config(self):
+        global _PREC, _PALETTE, _USE_GPU
+        if not os.path.exists(CONFIG_PATH):
+            return False
+        try:
+            with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+                c = json.load(f)
+        except Exception:
+            return False
+        self.cx = float(c.get("cx", self.cx))
+        self.cy = float(c.get("cy", self.cy))
+        self.half = float(c.get("half", self.half))
+        self.mi = int(c.get("mi", self.mi))
+        self.mi_auto = bool(c.get("mi_auto", self.mi_auto))
+        self.mi_auto_var.set(self.mi_auto)
+        st = "disabled" if self.mi_auto else "normal"
+        self.mi_minus.config(state=st)
+        self.mi_plus.config(state=st)
+        if set_prec(c.get("precision", "f32")):
+            self.f32_btn.deselect()
+            self.f64_btn.deselect()
+            (self.f32_btn if _PREC == "f32" else self.f64_btn).select()
+        pal = c.get("palette", "fuoco")
+        apply_palette(pal)
+        self.fire_btn.deselect()
+        self.ice_btn.deselect()
+        (self.fire_btn if pal == "fuoco" else self.ice_btn).select()
+        be = c.get("backend", "cuda" if _GPU else "cpu")
+        if be == "cuda" and not _GPU:
+            be = "cpu"
+        _USE_GPU = (be == "cuda")
+        self.cpu_btn.deselect()
+        self.cuda_btn.deselect()
+        (self.cpu_btn if be == "cpu" else self.cuda_btn).select()
+        self.root.title(f"Insieme di Mandelbrot - {backend()}")
+        self._update_mi_label()
+        return True
+
+    def _flush_config(self):
+        if self._cfg_dirty:
+            self._cfg_dirty = False
+            self.save_config()
+        self.root.after(1000, self._flush_config)
+
+    def on_exit(self):
+        self._cfg_dirty = False
+        try:
+            self.save_config()
+        except Exception:
+            pass
+        self.root.destroy()
+
+    # ---------------- benchmark standardizzato ----------------
+    def run_benchmark(self):
+        if getattr(self, "_bench_running", False):
+            self.status.config(text="benchmark gia' in corso")
+            return
+        self._bench_running = True
+        self.status.config(text="benchmark in corso (8 s)...")
+        threading.Thread(target=self._bench_worker, daemon=True).start()
+
+    def _bench_worker(self):
+        b = BENCH
+        need = b["w"] * b["h"] * 3
+        bench_buf = None
+        if _USE_GPU and _GPU:
+            try:
+                import cupy as cp
+                bench_buf = cp.empty((need,), dtype=cp.uint8)
+            except Exception:
+                bench_buf = None
+        t_end = time.perf_counter() + b["secs"]
+        count = 0
+        err = None
+        while time.perf_counter() < t_end:
+            try:
+                compute(b["cx"], b["cy"], b["half"], b["w"], b["h"], b["mi"], buf=bench_buf)
+                count += 1
+            except Exception as ex:
+                err = str(ex)
+                break
+        # thread-safe: il thread principale (in _poll) rileva il flag e mostra il risultato
+        self._bench_result = (count, b["secs"], err)
+        self._bench_finished = True
+
+    def _bench_done(self, count, secs, err):
+        self._bench_running = False
+        eng = backend()
+        if count > 0:
+            msg = (f"Completati {count} rendering in {secs:.1f} s\n"
+                   f"  {count/secs:.2f} rendering/s   |   {secs/count*1000:.0f} ms ciascuno\n\n"
+                   f"Regione standard: c=({BENCH['cx']}, {BENCH['cy']}i), meta={BENCH['half']}\n"
+                   f"Iterazioni: {BENCH['mi']}   |   Risoluzione: {BENCH['w']}x{BENCH['h']}\n"
+                   f"Motore: {eng}")
+        else:
+            msg = (f"Benchmark fallito: {err}\n\n"
+                   f"Regione standard: c=({BENCH['cx']}, {BENCH['cy']}i), meta={BENCH['half']}, "
+                   f"{BENCH['mi']} iter, {BENCH['w']}x{BENCH['h']}")
+        self.status.config(text="benchmark completato")
+        tk.messagebox.showinfo("Benchmark Mandelbrot", msg)
+
     def on_press(self, e):
         self.press_pos = (e.x, e.y)
         self.dragged = False
@@ -542,8 +722,30 @@ class MandelbrotApp:
         self.zoom_at(self.cx, self.cy, f)
 
     def reset(self):
+        global _PREC, _PALETTE, _USE_GPU
         self.cx, self.cy, self.half = CX0, CY0, HALF0
-        self.request_render("reset")
+        self.mi = MI0
+        self.mi_auto = True
+        self.mi_auto_var.set(True)
+        self.mi_minus.config(state="disabled")
+        self.mi_plus.config(state="disabled")
+        apply_palette("fuoco")
+        self.fire_btn.deselect()
+        self.ice_btn.deselect()
+        self.fire_btn.select()
+        _USE_GPU = _GPU
+        self.cpu_btn.deselect()
+        self.cuda_btn.deselect()
+        (self.cuda_btn if _GPU else self.cpu_btn).select()
+        if _GPU:
+            set_prec("f32")
+            self.f32_btn.deselect()
+            self.f64_btn.deselect()
+            self.f32_btn.select()
+        self.root.title(f"Insieme di Mandelbrot - {backend()}")
+        self._cfg_dirty = True
+        self._update_mi_label()
+        self.request_render("reset totale")
 
 def main():
     root = tk.Tk()
