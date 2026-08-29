@@ -5,8 +5,9 @@ Ogni modifica a `mandel_interattivo.py` (o ad altri sorgenti Python del
 progetto) DEVE:
 1. Incrementare la versione nel blocco di commento iniziale del sorgente
    (attualmente `VERSIONE: 4.0.0` in `mandel_interattivo.py`).
-   - bugfix = patch (x.y.Z), modifica funzionale = minor (x.Y.0),
-     riscrittura/architettura = major (X.0.0)
+    - bugfix = patch (x.y.Z), modifica minima (es. un dialog in piu, un testo,
+      un opzione) = patch (x.y.Z), modifica funzionale = minor (x.Y.0),
+      riscrittura/architettura = major (X.0.0)
 2. Aggiungere una voce allo STORICO nello stesso blocco, formato:
    `VERSIONE - AAAA-MM-GG - descrizione delle modifiche`.
 Il blocco è intitolato "Insieme di Mandelbrot - visualizzatore interattivo"

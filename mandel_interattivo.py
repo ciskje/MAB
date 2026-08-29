@@ -1,11 +1,15 @@
 # ============================================================================
 # Insieme di Mandelbrot - visualizzatore interattivo
-# VERSIONE: 4.5.0
+# VERSIONE: 4.5.1
 # ----------------------------------------------------------------------------
 # REGOLA: ogni modifica incrementa la versione e aggiunge una voce qui sotto
 # (formato: versione - data - descrizione modifiche).
 #
 # STORICO:
+# 4.5.1 - 2026-08-29
+#   - Benchmark: prima dell'avvio e' mostrato un dialog che descrive il test
+#     (regione, iterazioni, risoluzione, motore, durata) con OK (avvia) e
+#     Cancel (annulla)
 # 4.5.0 - 2026-08-29
 #   - Barra di stato: tolto "centro" e "meta-larghezza", aggiunto il tempo di
 #     rendering (misurato nel worker attorno a compute(), es. "render: 120 ms")
@@ -641,6 +645,17 @@ class MandelbrotApp:
     def run_benchmark(self):
         if getattr(self, "_bench_running", False):
             self.status.config(text="benchmark gia' in corso")
+            return
+        msg = (
+            "Benchmark standardizzato\n"
+            f"  Regione: c=({BENCH['cx']}, {BENCH['cy']}i), meta={BENCH['half']}\n"
+            f"  Iterazioni: {BENCH['mi']}   |   Risoluzione: {BENCH['w']}x{BENCH['h']}\n"
+            f"  Motore: {backend()}\n"
+            f"  Durata: {BENCH['secs']:.0f} s (loop continuo, poi report)\n\n"
+            "Avviare il benchmark?"
+        )
+        if not tk.messagebox.askokcancel("Benchmark Mandelbrot", msg):
+            self.status.config(text="benchmark annullato")
             return
         self._bench_running = True
         self.status.config(text="benchmark in corso (8 s)...")
