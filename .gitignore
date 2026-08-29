@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Log di esecuzione
+*.log
+
+# File di prova non pertinenti al progetto
+hello.py
+hello_world.py
+
+# Ambiente virtuale
+.venv/
+venv/
+
+# OS
+Thumbs.db
+.DS_Store
