@@ -1,11 +1,26 @@
 # ============================================================================
 # Insieme di Mandelbrot - visualizzatore interattivo
-# VERSIONE: 4.0.0
+# VERSIONE: 4.2.0
 # ----------------------------------------------------------------------------
 # REGOLA: ogni modifica incrementa la versione e aggiunge una voce qui sotto
 # (formato: versione - data - descrizione modifiche).
 #
 # STORICO:
+# 4.2.0 - 2026-08-29
+#   - Modalita "double" (precisione f64) disattivabile: kernel CUDA generati
+#     in due varianti (float32/float64) dalla stessa sorgente parametrizzata;
+#     radio "precisione: f32/f64" (default f32, f64 penalizzata su CUDA
+#     consumer ~1:32 throughput float); la CPU resta sempre f64 (complex128).
+#     Titolo e status mostrano la precisione attiva (es. "CUDA f64").
+#   - Controlli e radio spostati in alto (prima: sotto il canvas)
+#   - Menu File: "Salva immagine... (Ctrl+S)" + "Esci"; shortcut Ctrl+S;
+#     salva l'immagine corrente del canvas via asksaveasfilename
+# 4.1.0 - 2026-08-29
+#   - Modalita "MI auto" (attiva di default, disattivabile: pulsante
+#     "iter: auto"): le massime iterazioni crescono logaritmicamente con lo
+#     zoom: mi = 200 * (1 + log10(HALF0/half)), clamp [50, 5000]. A vista
+#     iniziale coincide con 200. Con auto attiva i pulsanti -100/+100 sono
+#     disabilitati e l'etichetta mostra il valore calcolato.
 # 4.0.0 - 2026-08-27
 #   - FIX: la LUT passata come argomento device al kernel veniva sovrascritta
 #     dall'output a ogni launch (colori magenta/azzurri random dal 2° frame in
@@ -32,6 +47,7 @@
 import tkinter as tk
 import threading
 import queue
+import math
 import numpy as np
 from PIL import Image, ImageTk
 
@@ -74,15 +90,18 @@ def apply_palette(name):
 # Le due palette sono incorporate nel kernel come array __constant__:
 # non si passano array device come argomenti (con la LUT come argomento
 # il buffer di output sovrascriveva la memoria della LUT a ogni launch).
+# Il kernel e' generato in due varianti di precisione (float32/float64)
+# dalla stessa sorgente parametrizzata: f32 e' nativa su CUDA, f64 e'
+# corretta ma penalizzata (~1:32 di throughput float) sulle GPU consumer.
 def _fmt_lut(lut):
     return ", ".join(str(int(v)) for v in lut.ravel())
 
-_KERNEL_SRC = r'''
+_KERNEL_TPL = r'''
 __constant__ unsigned char LUT_FIRE[768] = { @@FIRE@@ };
 __constant__ unsigned char LUT_ICE[768] = { @@ICE@@ };
 
-__device__ __forceinline__ void pal_lut(float t, const unsigned char* lut, unsigned char* rgb) {
-    int idx = (int)(fminf(1.0f, fmaxf(0.0f, t)) * 255.0f);
+__device__ __forceinline__ void pal_lut(@@T@@ t, const unsigned char* lut, unsigned char* rgb) {
+    int idx = (int)(@@FMIN@@(1.0@@S@@, @@FMAX@@(0.0@@S@@, t)) * 255.0@@S@@);
     rgb[0] = lut[idx * 3 + 0];
     rgb[1] = lut[idx * 3 + 1];
     rgb[2] = lut[idx * 3 + 2];
@@ -90,41 +109,41 @@ __device__ __forceinline__ void pal_lut(float t, const unsigned char* lut, unsig
 
 __device__ __forceinline__ void process_pixel(
     int col, int row, int w, int h,
-    float cx, float cy, float half, int mi,
+    @@T@@ cx, @@T@@ cy, @@T@@ half, int mi,
     const unsigned char* lut,
     unsigned char* __restrict__ out)
 {
     if (col >= w) return;
-    float x0 = cx + half * ((float)(2 * col - w) / (float)w);
-    float y0 = cy + half * ((float)h / (float)w) * ((float)(2 * row - h) / (float)h);
-    float a = cx * cx + (x0 - cx);
-    float two_cx = 2.0f * cx;
-    float wr = -cx, wi = 0.0f;
+    @@T@@ x0 = cx + half * ((@@T@@)(2 * col - w) / (@@T@@)w);
+    @@T@@ y0 = cy + half * ((@@T@@)h / (@@T@@)w) * ((@@T@@)(2 * row - h) / (@@T@@)h);
+    @@T@@ a = cx * cx + (x0 - cx);
+    @@T@@ two_cx = 2.0@@S@@ * cx;
+    @@T@@ wr = -cx, wi = 0.0@@S@@;
     int it = 0;
     bool esc = false;
-    float mag2 = 0.0f;
+    @@T@@ mag2 = 0.0@@S@@;
     for (int i = 0; i < mi; ++i) {
         if (esc) break;
-        float nr = wr * wr - wi * wi + two_cx * wr + a;
-        float ni = two_cx * wi + 2.0f * wr * wi + y0;
+        @@T@@ nr = wr * wr - wi * wi + two_cx * wr + a;
+        @@T@@ ni = two_cx * wi + 2.0@@S@@ * wr * wi + y0;
         wr = nr; wi = ni;
-        float zr = wr + cx;
+        @@T@@ zr = wr + cx;
         mag2 = zr * zr + wi * wi;
-        if (mag2 > 4.0f) { esc = true; it = i; }
+        if (mag2 > 4.0@@S@@) { esc = true; it = i; }
     }
     unsigned char* p = out + (size_t)(row * w + col) * 3;
     if (!esc) { p[0] = 0; p[1] = 0; p[2] = 0; return; }
-    float nu = (float)it + 1.0f - log2f(0.5f * logf(mag2));
-    float t = powf(fminf(1.0f, fmaxf(0.0f, nu / (float)mi)), 0.35f);
+    @@T@@ nu = (@@T@@)it + 1.0@@S@@ - @@LOG2@@(0.5@@S@@ * @@LOG@@(mag2));
+    @@T@@ t = @@POW@@(@@FMIN@@(1.0@@S@@, @@FMAX@@(0.0@@S@@, nu / (@@T@@)mi)), 0.35@@S@@);
     unsigned char rgb[3];
     pal_lut(t, lut, rgb);
     p[0] = rgb[0]; p[1] = rgb[1]; p[2] = rgb[2];
 }
 
-extern "C" __global__ void __launch_bounds__(256) mandel_kernel(
+extern "C" __global__ void __launch_bounds__(256) @@KNAME@@(
     unsigned char* __restrict__ out,
     int pal,
-    float cx, float cy, float half,
+    @@T@@ cx, @@T@@ cy, @@T@@ half,
     int w, int h, int mi)
 {
     const unsigned char* lut = (pal == 1) ? LUT_ICE : LUT_FIRE;
@@ -136,19 +155,52 @@ extern "C" __global__ void __launch_bounds__(256) mandel_kernel(
 }
 '''
 
+_PRECS = {
+    "f32": dict(T="float",  S="f", FMIN="fminf", FMAX="fmaxf",
+                LOG2="log2f", LOG="logf", POW="powf", KNAME="mandel_kernel_f32"),
+    "f64": dict(T="double", S="",  FMIN="fmin",  FMAX="fmax",
+                LOG2="log2",  LOG="log",  POW="pow",  KNAME="mandel_kernel_f64"),
+}
+
+def _build_kernel(prec):
+    d = _PRECS[prec]
+    src = (_KERNEL_TPL
+           .replace("@@FIRE@@", _fmt_lut(make_lut(_FIRE)))
+           .replace("@@ICE@@", _fmt_lut(make_lut(_ICE))))
+    for k, v in d.items():
+        src = src.replace("@@" + k + "@@", v)
+    return src, d["KNAME"]
+
 _GPU = False
-_KERNEL = None
+_KERNEL_F32 = None
+_KERNEL_F64 = None
 _BUF = None
 try:
     import cupy as cp
     if cp.cuda.is_available():
-        _src = (_KERNEL_SRC
-                .replace("@@FIRE@@", _fmt_lut(make_lut(_FIRE)))
-                .replace("@@ICE@@", _fmt_lut(make_lut(_ICE))))
-        _KERNEL = cp.RawKernel(_src, "mandel_kernel")
+        _src, _name = _build_kernel("f32")
+        _KERNEL_F32 = cp.RawKernel(_src, _name)
         _GPU = True
+        try:
+            _src, _name = _build_kernel("f64")
+            _KERNEL_F64 = cp.RawKernel(_src, _name)
+        except Exception:
+            _KERNEL_F64 = None
 except Exception:
     _GPU = False
+
+_PREC = "f32"
+
+def set_prec(p):
+    global _PREC
+    if p == "f64" and _KERNEL_F64 is None:
+        return False
+    if p in ("f32", "f64"):
+        _PREC = p
+    return True
+
+def prec():
+    return _PREC
 
 def compute_gpu(cx, cy, half, w, h, mi):
     global _BUF
@@ -159,15 +211,18 @@ def compute_gpu(cx, cy, half, w, h, mi):
     bx, by = 16, 16
     grid = ((w + 2 * bx - 1) // (2 * bx), (h + by - 1) // by)
     pal = 1 if _PALETTE == "ghiaccio" else 0
+    use64 = (_PREC == "f64") and (_KERNEL_F64 is not None)
+    kernel = _KERNEL_F64 if use64 else _KERNEL_F32
+    fdt = np.float64 if use64 else np.float32
     args = (out,
             np.asarray(pal, dtype=np.int32),
-            np.asarray(cx, dtype=np.float32),
-            np.asarray(cy, dtype=np.float32),
-            np.asarray(half, dtype=np.float32),
+            np.asarray(cx, dtype=fdt),
+            np.asarray(cy, dtype=fdt),
+            np.asarray(half, dtype=fdt),
             np.asarray(w, dtype=np.int32),
             np.asarray(h, dtype=np.int32),
             np.asarray(mi, dtype=np.int32))
-    _KERNEL(grid, (bx, by), args)
+    kernel(grid, (bx, by), args)
     return Image.fromarray(out.get().reshape((h, w, 3)))
 
 # ---------------- CPU (fallback) ----------------
@@ -199,7 +254,9 @@ def compute_cpu(cx, cy, half, w, h, mi):
 _USE_GPU = _GPU
 
 def backend():
-    return "CUDA" if _USE_GPU else "CPU"
+    if _USE_GPU:
+        return "CUDA " + _PREC
+    return "CPU f64"
 
 def compute(cx, cy, half, w, h, mi):
     if _USE_GPU:
@@ -212,14 +269,9 @@ class MandelbrotApp:
         root.title(f"Insieme di Mandelbrot - {backend()}")
         self.cx, self.cy, self.half = CX0, CY0, HALF0
         self.mi = MI0
+        self.mi_auto = True
         self.canvas = tk.Canvas(root, width=INIT_W, height=INIT_H, bg="black", highlightthickness=0)
-        self.canvas.pack(fill="both", expand=True)
-        self.btns = tk.Frame(root)
-        self.btns.pack(fill="x")
-        self.mi_label = tk.Label(self.btns, text=f"iterazioni: {self.mi}")
-        self.mi_label.pack(side="left", padx=8)
-        tk.Button(self.btns, text="-100", command=lambda: self.change_mi(-100)).pack(side="left", padx=2)
-        tk.Button(self.btns, text="+100", command=lambda: self.change_mi(+100)).pack(side="left", padx=2)
+        # --- barra comandi in alto ---
         self.ctl = tk.Frame(root)
         self.ctl.pack(fill="x")
         bk = tk.Frame(self.ctl)
@@ -242,8 +294,49 @@ class MandelbrotApp:
         self.ice_btn = tk.Checkbutton(pl, text="Ghiaccio", command=lambda: self.choose_palette("ghiaccio"))
         self.ice_btn.pack(side="left", padx=2)
         self.fire_btn.select()
+        pc = tk.Frame(self.ctl)
+        pc.pack(side="left", padx=12)
+        tk.Label(pc, text="precisione:").pack(side="left")
+        self.f32_btn = tk.Checkbutton(pc, text="f32", command=lambda: self.set_precision("f32"))
+        self.f32_btn.pack(side="left", padx=2)
+        self.f64_btn = tk.Checkbutton(pc, text="f64", command=lambda: self.set_precision("f64"))
+        self.f64_btn.pack(side="left", padx=2)
+        self.f32_btn.select()
+        if not _GPU:
+            self.f32_btn.config(state="disabled")
+            self.f64_btn.config(state="disabled")
+        elif _KERNEL_F64 is None:
+            self.f64_btn.config(state="disabled")
+        mif = tk.Frame(self.ctl)
+        mif.pack(side="left", padx=12)
+        tk.Label(mif, text="iter:").pack(side="left")
+        self.mi_auto_var = tk.BooleanVar(value=True)
+        self.auto_btn = tk.Checkbutton(mif, text="auto", variable=self.mi_auto_var,
+                                       command=self.toggle_auto_mi)
+        self.auto_btn.pack(side="left", padx=2)
+        self.btns = tk.Frame(root)
+        self.btns.pack(fill="x")
+        self.mi_label = tk.Label(self.btns, text=f"iterazioni: {self.mi}")
+        self.mi_label.pack(side="left", padx=8)
+        self.mi_minus = tk.Button(self.btns, text="-100", command=lambda: self.change_mi(-100))
+        self.mi_minus.pack(side="left", padx=2)
+        self.mi_plus = tk.Button(self.btns, text="+100", command=lambda: self.change_mi(+100))
+        self.mi_plus.pack(side="left", padx=2)
+        self.mi_minus.config(state="disabled")
+        self.mi_plus.config(state="disabled")
+        # --- canvas al centro, status in fondo ---
+        self.canvas.pack(fill="both", expand=True)
         self.status = tk.Label(root, text="render...")
         self.status.pack(fill="x")
+        # --- menu File ---
+        self.menu = tk.Menu(root)
+        self.mfile = tk.Menu(self.menu, tearoff=0)
+        self.mfile.add_command(label="Salva immagine... (Ctrl+S)", command=self.save_png)
+        self.mfile.add_separator()
+        self.mfile.add_command(label="Esci", command=root.destroy)
+        self.menu.add_cascade(label="File", menu=self.mfile)
+        root.config(menu=self.menu)
+        self.root.bind("<Control-s>", lambda e: self.save_png())
         self.canvas.bind("<ButtonPress-1>", self.on_press)
         self.canvas.bind("<B1-Motion>", self.on_drag)
         self.canvas.bind("<ButtonRelease-1>", self.on_release)
@@ -280,17 +373,18 @@ class MandelbrotApp:
 
     def request_render(self, msg):
         self._last_msg = msg
+        self._update_mi_label()
         if self._full_timer is not None:
             self.root.after_cancel(self._full_timer)
             self._full_timer = None
         w, h = self.canvas_size()
-        view = (self.cx, self.cy, self.half, self.mi)
+        view = (self.cx, self.cy, self.half, self.eff_mi())
         self._submit(view, max(w // 4, 16), max(h // 4, 16))
         self._full_timer = self.root.after(500, lambda: self._maybe_full(view))
 
     def _maybe_full(self, view):
         self._full_timer = None
-        if (self.cx, self.cy, self.half, self.mi) == view:
+        if (self.cx, self.cy, self.half, self.eff_mi()) == view:
             w, h = self.canvas_size()
             self._submit(view, w, h)
 
@@ -328,6 +422,7 @@ class MandelbrotApp:
         w, h = self.canvas_size()
         if img.size != (w, h):
             img = img.resize((w, h), Image.NEAREST)
+        self.pil = img
         self.photo = ImageTk.PhotoImage(img)
         self.canvas.delete("all")
         self.canvas.create_image(w // 2, h // 2, image=self.photo)
@@ -340,6 +435,26 @@ class MandelbrotApp:
         if e.width < 50 or e.height < 50:
             return
         self.request_render("ridimensionata")
+
+    def eff_mi(self):
+        if not self.mi_auto:
+            return self.mi
+        z = HALF0 / max(self.half, 1e-12)
+        return int(max(50, min(5000, MI0 * (1.0 + math.log10(z)))))
+
+    def _update_mi_label(self):
+        if self.mi_auto:
+            self.mi_label.config(text=f"iterazioni: {self.eff_mi()} (auto)")
+        else:
+            self.mi_label.config(text=f"iterazioni: {self.mi}")
+
+    def toggle_auto_mi(self):
+        self.mi_auto = self.mi_auto_var.get()
+        st = "disabled" if self.mi_auto else "normal"
+        self.mi_minus.config(state=st)
+        self.mi_plus.config(state=st)
+        self._update_mi_label()
+        self.request_render("MI: auto" if self.mi_auto else "MI: fissi")
 
     def change_mi(self, d):
         self.mi = max(50, self.mi + d)
@@ -363,6 +478,33 @@ class MandelbrotApp:
         self.ice_btn.deselect()
         (self.fire_btn if name == "fuoco" else self.ice_btn).select()
         self.request_render("palette: " + name)
+
+    def set_precision(self, p):
+        if p == "f64" and _KERNEL_F64 is None:
+            return
+        if set_prec(p):
+            self.f32_btn.deselect()
+            self.f64_btn.deselect()
+            (self.f32_btn if p == "f32" else self.f64_btn).select()
+        self.root.title(f"Insieme di Mandelbrot - {backend()}")
+        self.request_render("precisione: " + p)
+
+    def save_png(self):
+        import time as _t
+        if getattr(self, "pil", None) is None:
+            self.status.config(text="niente immagine da salvare")
+            return
+        default = "mandelbrot_" + _t.strftime("%Y%m%d_%H%M%S") + ".png"
+        path = tk.filedialog.asksaveasfilename(
+            parent=self.root, defaultextension=".png", initialfile=default,
+            filetypes=[("Immagini PNG", "*.png")])
+        if not path:
+            return
+        try:
+            self.pil.save(path, "PNG")
+            self.status.config(text="salvata: " + path)
+        except Exception as ex:
+            self.status.config(text="errore salvataggio: " + str(ex))
 
     def on_press(self, e):
         self.press_pos = (e.x, e.y)
