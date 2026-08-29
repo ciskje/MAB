@@ -1,11 +1,27 @@
 # ============================================================================
 # Insieme di Mandelbrot - visualizzatore interattivo
-# VERSIONE: 4.8.0
+# VERSIONE: 4.11.0
 # ----------------------------------------------------------------------------
 # REGOLA: ogni modifica incrementa la versione e aggiunge una voce qui sotto
 # (formato: versione - data - descrizione modifiche).
 #
 # STORICO:
+# 4.11.0 - 2026-08-29
+#   - Carica zona: nuova voce menu File "Carica zona..." che legge un file JSON
+#     (stesso formato del salvataggio) e ripristina vista + iterazioni; il file
+#     scelto diventa il "file corrente" per "Salva zona".
+#   - Titolo: mostra il nome del file corrente (quello usato da "Salva zona");
+#     il file corrente e' persistito in config.json (view_file).
+# 4.10.0 - 2026-08-29
+#   - Benchmark: nuova regione di default (zoom profondo
+#     c=(0.42663924626512445, -0.3414973874054564i), half=2.298743311298834e-06)
+#     e parametri persistiti in config.json (salvati/caricati, overridibili);
+#     i metodi benchmark usano self.bench invece della costante BENCH.
+# 4.9.0 - 2026-08-29
+#   - Nuova: salvataggio della zona attuale (vista) su file JSON testuale
+#     leggibile (menu File): "Salva zona" (riscrive l'ultimo file scelto, o
+#     chiede il nome al primo uso) e "Salva zona con nome...". Salva
+#     cx/cy/half + iterazioni (mi, mi_auto) per riprodurre la vista.
 # 4.8.0 - 2026-08-29
 #   - Refactor UI: __init__ (116 righe) spezzato in _setup_fonts/_build_toolbar/
 #     _build_canvas_status/_build_menu/_bind_events/_start_pipeline. Helper
@@ -130,15 +146,17 @@ INIT_W, INIT_H = 960, 540
 CX0, CY0, HALF0 = -0.5, 0.0, 1.5
 MI0 = 200
 MIN_HALF = 1e-12  # clamp minimo per half (evita zoom infinito -> half=0, stato degenere)
+MIN_DIM = 50  # larghezza/altezza canvas minimi per considerare il canvas valido
 
 # Config salvata/caricata a ogni esecuzione (vista + tutti i settaggi)
 CONFIG_PATH = os.path.join(os.path.expanduser("~"), "mandelbrot", "config.json")
 
-# Benchmark standardizzato: regione fissa, >=3000 iterazioni, risoluzione fissa
-BENCH = dict(cx=-0.74364388703, cy=0.13182590421, half=0.002,
+# Benchmark: regione + parametri. Default = regione di zoom profondo (seme
+# fornito dall'utente); i valori sono persistiti in config.json (overridibili).
+BENCH = dict(cx=0.42663924626512445, cy=-0.3414973874054564, half=2.298743311298834e-06,
              mi=3000, w=960, h=540, secs=8.0)
 
-VERSION = "4.8.0"
+VERSION = "4.11.0"
 
 # ---------------- Palette (LUT 256x3 condivisa CPU/GPU) ----------------
 _FIRE = (
@@ -414,6 +432,8 @@ class MandelbrotApp:
         self.cx, self.cy, self.half = CX0, CY0, HALF0
         self.mi = MI0
         self.mi_auto = True
+        self.view_file = None
+        self.bench = dict(BENCH)
         self._build_toolbar()
         self._build_canvas_status()
         self._build_menu()
@@ -507,6 +527,9 @@ class MandelbrotApp:
         self.menu = tk.Menu(self.root)
         self.mfile = tk.Menu(self.menu, tearoff=0)
         self.mfile.add_command(label="Salva immagine... (Ctrl+S)", command=self.save_png)
+        self.mfile.add_command(label="Carica zona...", command=self.load_zone_as)
+        self.mfile.add_command(label="Salva zona", command=self.save_zone)
+        self.mfile.add_command(label="Salva zona con nome...", command=self.save_zone_as)
         self.mfile.add_separator()
         self.mfile.add_command(label="Esci", command=self.on_exit)
         self.menu.add_cascade(label="File", menu=self.mfile)
@@ -545,7 +568,10 @@ class MandelbrotApp:
 
     # ---------------- helper UI (titolo + selezione radio anti-duplicazione) ----------------
     def _refresh_title(self):
-        self.root.title(f"Insieme di Mandelbrot v{VERSION} - {backend()}")
+        t = f"Insieme di Mandelbrot v{VERSION} - {backend()}"
+        if self.view_file:
+            t += " - " + os.path.basename(self.view_file)
+        self.root.title(t)
 
     def _select_palette(self, name):
         apply_palette(name)
@@ -577,7 +603,7 @@ class MandelbrotApp:
     def canvas_size(self):
         w = self.canvas.winfo_width()
         h = self.canvas.winfo_height()
-        if w < 50 or h < 50:
+        if w < MIN_DIM or h < MIN_DIM:
             w, h = INIT_W, INIT_H
         return w, h
 
@@ -654,7 +680,7 @@ class MandelbrotApp:
         if (e.width, e.height) == self._size:
             return
         self._size = (e.width, e.height)
-        if e.width < 50 or e.height < 50:
+        if e.width < MIN_DIM or e.height < MIN_DIM:
             return
         self.request_render("ridimensionata")
 
@@ -723,12 +749,79 @@ class MandelbrotApp:
         except Exception as ex:
             self.status.config(text="errore salvataggio: " + str(ex))
 
+    # ---------------- salvataggio zona attuale (file JSON leggibile) ----------------
+    def _save_zone_to(self, path):
+        c = {
+            "app": "mandelbrot",
+            "versione": VERSION,
+            "cx": self.cx,
+            "cy": self.cy,
+            "half": self.half,
+            "mi": self.mi,
+            "mi_auto": self.mi_auto,
+        }
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(c, f, indent=2, ensure_ascii=False)
+                f.write("\n")
+            self.view_file = path
+            self._refresh_title()
+            self.status.config(text="zona salvata: " + path)
+        except Exception as ex:
+            self.status.config(text="errore salvataggio zona: " + str(ex))
+
+    def save_zone(self):
+        if self.view_file:
+            self._save_zone_to(self.view_file)
+        else:
+            self.save_zone_as()
+
+    def save_zone_as(self):
+        default = "mandelbrot_" + time.strftime("%Y%m%d_%H%M%S") + ".json"
+        path = tk.filedialog.asksaveasfilename(
+            parent=self.root, defaultextension=".json", initialfile=default,
+            filetypes=[("File JSON", "*.json"), ("Tutti i file", "*.*")])
+        if not path:
+            return
+        self._save_zone_to(path)
+
+    # ---------------- caricamento zona da file JSON ----------------
+    def _load_zone_from(self, path):
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                c = json.load(f)
+            self.cx = float(c["cx"])
+            self.cy = float(c["cy"])
+            self.half = max(float(c["half"]), MIN_HALF)
+            self.mi = int(c.get("mi", self.mi))
+            self.mi_auto = bool(c.get("mi_auto", self.mi_auto))
+        except Exception as ex:
+            self.status.config(text="errore caricamento zona: " + str(ex))
+            return
+        self.mi_auto_var.set(self.mi_auto)
+        st = "disabled" if self.mi_auto else "normal"
+        self.mi_minus.config(state=st)
+        self.mi_plus.config(state=st)
+        self.view_file = path
+        self._refresh_title()
+        self.request_render("zona caricata: " + os.path.basename(path))
+
+    def load_zone_as(self):
+        path = tk.filedialog.askopenfilename(
+            parent=self.root, title="Carica zona",
+            filetypes=[("File JSON", "*.json"), ("Tutti i file", "*.*")])
+        if not path:
+            return
+        self._load_zone_from(path)
+
     # ---------------- config.json (salva/carica tutti i settaggi) ----------------
     def save_config(self):
         c = dict(cx=self.cx, cy=self.cy, half=self.half,
                  mi=self.mi, mi_auto=bool(self.mi_auto),
                  precision=_PREC, palette=_PALETTE,
-                 backend=("cuda" if _USE_GPU else "cpu"))
+                 backend=("cuda" if _USE_GPU else "cpu"),
+                 bench=dict(self.bench),
+                 view_file=self.view_file)
         try:
             d = os.path.dirname(CONFIG_PATH)
             if d:
@@ -751,6 +844,9 @@ class MandelbrotApp:
         self.half = float(c.get("half", self.half))
         self.mi = int(c.get("mi", self.mi))
         self.mi_auto = bool(c.get("mi_auto", self.mi_auto))
+        self._load_bench(c.get("bench"))
+        vf = c.get("view_file")
+        self.view_file = vf if (isinstance(vf, str) and vf) else None
         self.mi_auto_var.set(self.mi_auto)
         st = "disabled" if self.mi_auto else "normal"
         self.mi_minus.config(state=st)
@@ -764,6 +860,18 @@ class MandelbrotApp:
         self._refresh_title()
         self._update_mi_label()
         return True
+
+    def _load_bench(self, b):
+        if not isinstance(b, dict):
+            return
+        self.bench = dict(BENCH)
+        self.bench["cx"] = float(b.get("cx", BENCH["cx"]))
+        self.bench["cy"] = float(b.get("cy", BENCH["cy"]))
+        self.bench["half"] = float(b.get("half", BENCH["half"]))
+        self.bench["mi"] = int(b.get("mi", BENCH["mi"]))
+        self.bench["w"] = int(b.get("w", BENCH["w"]))
+        self.bench["h"] = int(b.get("h", BENCH["h"]))
+        self.bench["secs"] = float(b.get("secs", BENCH["secs"]))
 
     def _flush_config(self):
         if self._cfg_dirty:
@@ -784,12 +892,13 @@ class MandelbrotApp:
         if getattr(self, "_bench_running", False):
             self.status.config(text="benchmark gia' in corso")
             return
+        b = self.bench
         msg = (
             "Benchmark standardizzato\n"
-            f"  Regione: c=({BENCH['cx']}, {BENCH['cy']}i), meta={BENCH['half']}\n"
-            f"  Iterazioni: {BENCH['mi']}   |   Risoluzione: {BENCH['w']}x{BENCH['h']}\n"
+            f"  Regione: c=({b['cx']}, {b['cy']}i), meta={b['half']}\n"
+            f"  Iterazioni: {b['mi']}   |   Risoluzione: {b['w']}x{b['h']}\n"
             f"  Motore: {bench_engine()} (sempre float32, indipendente dai settaggi)\n"
-            f"  Durata: {BENCH['secs']:.0f} s (loop continuo, poi report)\n\n"
+            f"  Durata: {b['secs']:.0f} s (loop continuo, poi report)\n\n"
             "Avviare il benchmark?"
         )
         if not tk.messagebox.askokcancel("Benchmark Mandelbrot", msg):
@@ -800,7 +909,7 @@ class MandelbrotApp:
         threading.Thread(target=self._bench_worker, daemon=True).start()
 
     def _bench_worker(self):
-        b = BENCH
+        b = self.bench
         need = b["w"] * b["h"] * 3
         bench_buf = None
         if _GPU:
@@ -832,16 +941,17 @@ class MandelbrotApp:
     def _bench_done(self, count, secs, err):
         self._bench_running = False
         eng = bench_engine()
+        b = self.bench
         if count > 0:
             msg = (f"Completati {count} rendering in {secs:.1f} s\n"
                    f"  {count/secs:.2f} rendering/s   |   {secs/count*1000:.0f} ms ciascuno\n\n"
-                   f"Regione standard: c=({BENCH['cx']}, {BENCH['cy']}i), meta={BENCH['half']}\n"
-                   f"Iterazioni: {BENCH['mi']}   |   Risoluzione: {BENCH['w']}x{BENCH['h']}\n"
+                   f"Regione standard: c=({b['cx']}, {b['cy']}i), meta={b['half']}\n"
+                   f"Iterazioni: {b['mi']}   |   Risoluzione: {b['w']}x{b['h']}\n"
                    f"Motore: {eng}")
         else:
             msg = (f"Benchmark fallito: {err}\n\n"
-                   f"Regione standard: c=({BENCH['cx']}, {BENCH['cy']}i), meta={BENCH['half']}, "
-                   f"{BENCH['mi']} iter, {BENCH['w']}x{BENCH['h']}")
+                   f"Regione standard: c=({b['cx']}, {b['cy']}i), meta={b['half']}, "
+                   f"{b['mi']} iter, {b['w']}x{b['h']}")
         self.status.config(text="benchmark completato")
         tk.messagebox.showinfo("Benchmark Mandelbrot", msg)
 

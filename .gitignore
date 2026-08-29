@@ -6,6 +6,9 @@ __pycache__/
 # Log di esecuzione
 *.log
 
+# Zone salvate dal tool ("Salva zona", nome di default con timestamp)
+mandelbrot_*.json
+
 # File di prova non pertinenti al progetto
 hello.py
 hello_world.py
