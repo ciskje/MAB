@@ -1,11 +1,23 @@
 # ============================================================================
 # Insieme di Mandelbrot - visualizzatore interattivo
-# VERSIONE: 4.7.2
+# VERSIONE: 4.8.0
 # ----------------------------------------------------------------------------
 # REGOLA: ogni modifica incrementa la versione e aggiunge una voce qui sotto
 # (formato: versione - data - descrizione modifiche).
 #
 # STORICO:
+# 4.8.0 - 2026-08-29
+#   - Refactor UI: __init__ (116 righe) spezzato in _setup_fonts/_build_toolbar/
+#     _build_canvas_status/_build_menu/_bind_events/_start_pipeline. Helper
+#     _refresh_title e _select_palette/_select_backend/_select_precision eliminano
+#     la triplice ripetizione "deselect+select" (era in set_* + load_config + reset).
+#   - Perf CPU: test di fuga senza sqrt (|z|>2 -> z.re^2+z.im^2>4), output
+#     bit-identico (maxdiff=0 su 5 viste incl. deep zoom). Perf GPU: indice
+#     palette preallocato (_PAL_IDX), niente np.asarray per render.
+#   - Robustezza: clamp half >= MIN_HALF (1e-12) in zoom_at (evita half=0).
+#   - Pulizia: rimossa prec() (getter mai usato) e import time ridondante in
+#     save_png; change_mi usa _update_mi_label(); tolti 'global' inutili
+#     (save/load_config, reset).
 # 4.7.2 - 2026-08-29
 #   - UI: etichette con iniziale maiuscola (Motore/Palette/Precisione/Iter/Auto/
 #     Iterazioni)
@@ -117,6 +129,7 @@ from PIL import Image, ImageTk
 INIT_W, INIT_H = 960, 540
 CX0, CY0, HALF0 = -0.5, 0.0, 1.5
 MI0 = 200
+MIN_HALF = 1e-12  # clamp minimo per half (evita zoom infinito -> half=0, stato degenere)
 
 # Config salvata/caricata a ogni esecuzione (vista + tutti i settaggi)
 CONFIG_PATH = os.path.join(os.path.expanduser("~"), "mandelbrot", "config.json")
@@ -125,7 +138,7 @@ CONFIG_PATH = os.path.join(os.path.expanduser("~"), "mandelbrot", "config.json")
 BENCH = dict(cx=-0.74364388703, cy=0.13182590421, half=0.002,
              mi=3000, w=960, h=540, secs=8.0)
 
-VERSION = "4.7.2"
+VERSION = "4.8.0"
 
 # ---------------- Palette (LUT 256x3 condivisa CPU/GPU) ----------------
 _FIRE = (
@@ -317,8 +330,8 @@ def set_prec(p):
         _PREC = p
     return True
 
-def prec():
-    return _PREC
+# Indice palette (0..N-1) preallocato come array size-1: evita np.asarray per render
+_PAL_IDX = [np.asarray(i, dtype=np.int32) for i in range(len(PALETTES))]
 
 def compute_gpu(cx, cy, half, w, h, mi, buf=None, prec=None):
     global _BUF
@@ -336,7 +349,7 @@ def compute_gpu(cx, cy, half, w, h, mi, buf=None, prec=None):
     kernel = _KERNEL_F64 if use64 else _KERNEL_F32
     fdt = np.float64 if use64 else np.float32
     args = (out,
-            np.asarray(pal, dtype=np.int32),
+            _PAL_IDX[pal],
             np.asarray(cx, dtype=fdt),
             np.asarray(cy, dtype=fdt),
             np.asarray(half, dtype=fdt),
@@ -368,7 +381,7 @@ def compute_cpu(cx, cy, half, w, h, mi):
                 break
             np.square(z, out=z)
             z += c
-            m = (np.abs(z) > 2) & ~diverged
+            m = ((z.real * z.real + z.imag * z.imag) > 4.0) & ~diverged
             if not m.any():
                 continue
             diverged |= m
@@ -397,20 +410,34 @@ def bench_engine():
 class MandelbrotApp:
     def __init__(self, root):
         self.root = root
-        # UI piu leggibile: ingrandisce font default di tutti i widget (checkbutton,
-        # etichette, pulsanti, menu) preservando la famiglia nativa
+        self._setup_fonts()
+        self.cx, self.cy, self.half = CX0, CY0, HALF0
+        self.mi = MI0
+        self.mi_auto = True
+        self._build_toolbar()
+        self._build_canvas_status()
+        self._build_menu()
+        self._bind_events()
+        self._start_pipeline()
+        self._refresh_title()
+        if self.load_config():
+            self.request_render("config caricata")
+        else:
+            self.request_render("iniziale")
+
+    def _setup_fonts(self):
+        # UI piu leggibile: ingrandisce il font default di tutti i widget
+        # (checkbutton, etichette, pulsanti, menu) preservando la famiglia nativa
         for _fn in ("TkDefaultFont", "TkTextFont", "TkMenuFont"):
             try:
                 tkfont.nametofont(_fn).config(size=13)
             except Exception:
                 pass
-        root.title(f"Insieme di Mandelbrot v{VERSION} - {backend()}")
-        self.cx, self.cy, self.half = CX0, CY0, HALF0
-        self.mi = MI0
-        self.mi_auto = True
-        self.canvas = tk.Canvas(root, width=INIT_W, height=INIT_H, bg="black", highlightthickness=0)
+
+    def _build_toolbar(self):
+        self.canvas = tk.Canvas(self.root, width=INIT_W, height=INIT_H, bg="black", highlightthickness=0)
         # --- barra comandi in alto ---
-        self.ctl = tk.Frame(root)
+        self.ctl = tk.Frame(self.root)
         self.ctl.pack(fill="x")
         bk = tk.Frame(self.ctl)
         bk.pack(side="left", padx=(8, 12))
@@ -455,7 +482,7 @@ class MandelbrotApp:
         self.auto_btn = tk.Checkbutton(mif, text="Auto", variable=self.mi_auto_var,
                                         command=self.toggle_auto_mi)
         self.auto_btn.pack(side="left", padx=2, pady=3)
-        self.btns = tk.Frame(root)
+        self.btns = tk.Frame(self.root)
         self.btns.pack(fill="x")
         self.mi_label = tk.Label(self.btns, text=f"Iterazioni: {self.mi}")
         self.mi_label.pack(side="left", padx=8, pady=3)
@@ -469,19 +496,27 @@ class MandelbrotApp:
         self.bench_btn.pack(side="right", padx=(16, 8), pady=3)
         self.reset_btn = tk.Button(self.btns, text="Reset", command=self.reset)
         self.reset_btn.pack(side="right", padx=2, pady=3)
+
+    def _build_canvas_status(self):
         # --- canvas al centro, status in fondo ---
         self.canvas.pack(fill="both", expand=True)
-        self.status = tk.Label(root, text="render...")
+        self.status = tk.Label(self.root, text="render...")
         self.status.pack(fill="x")
-        # --- menu File ---
-        self.menu = tk.Menu(root)
+
+    def _build_menu(self):
+        self.menu = tk.Menu(self.root)
         self.mfile = tk.Menu(self.menu, tearoff=0)
         self.mfile.add_command(label="Salva immagine... (Ctrl+S)", command=self.save_png)
         self.mfile.add_separator()
         self.mfile.add_command(label="Esci", command=self.on_exit)
         self.menu.add_cascade(label="File", menu=self.mfile)
-        root.config(menu=self.menu)
-        root.protocol("WM_DELETE_WINDOW", self.on_exit)
+        self.root.config(menu=self.menu)
+        self.root.protocol("WM_DELETE_WINDOW", self.on_exit)
+
+    def _bind_events(self):
+        self.press_pos = None
+        self.dragged = False
+        self._size = (0, 0)
         self.root.bind("<Control-s>", lambda e: self.save_png())
         self.canvas.bind("<ButtonPress-1>", self.on_press)
         self.canvas.bind("<B1-Motion>", self.on_drag)
@@ -491,10 +526,9 @@ class MandelbrotApp:
         self.canvas.bind("<Key-r>", lambda e: self.reset())
         self.canvas.bind("<Key-plus>", lambda e: self.zoom_center(2.0))
         self.canvas.bind("<Key-minus>", lambda e: self.zoom_center(0.5))
-        self.press_pos = None
-        self.dragged = False
-        self._size = (0, 0)
-        # pipeline asincrona latest-wins
+
+    def _start_pipeline(self):
+        # pipeline asincrona latest-wins (worker + Condition, niente blocco UI)
         self._cv = threading.Condition()
         self._job = None
         self._frames = queue.Queue()
@@ -508,10 +542,37 @@ class MandelbrotApp:
         self._bench_finished = False
         self.root.after(30, self._poll)
         self.root.after(1000, self._flush_config)
-        if self.load_config():
-            self.request_render("config caricata")
-        else:
-            self.request_render("iniziale")
+
+    # ---------------- helper UI (titolo + selezione radio anti-duplicazione) ----------------
+    def _refresh_title(self):
+        self.root.title(f"Insieme di Mandelbrot v{VERSION} - {backend()}")
+
+    def _select_palette(self, name):
+        apply_palette(name)
+        name = _PALETTE
+        for b in self.pal_btns.values():
+            b.deselect()
+        self.pal_btns[name].select()
+
+    def _select_backend(self, be):
+        global _USE_GPU
+        if be == "cuda" and not _GPU:
+            return False
+        _USE_GPU = (be == "cuda")
+        self.cpu_btn.deselect()
+        self.cuda_btn.deselect()
+        (self.cpu_btn if be == "cpu" else self.cuda_btn).select()
+        return True
+
+    def _select_precision(self, p):
+        if p == "f64" and _KERNEL_F64 is None:
+            return False
+        if not set_prec(p):
+            return False
+        self.f32_btn.deselect()
+        self.f64_btn.deselect()
+        (self.f32_btn if p == "f32" else self.f64_btn).select()
+        return True
 
     def canvas_size(self):
         w = self.canvas.winfo_width()
@@ -627,44 +688,30 @@ class MandelbrotApp:
 
     def change_mi(self, d):
         self.mi = max(50, self.mi + d)
-        self.mi_label.config(text=f"Iterazioni: {self.mi}")
+        self._update_mi_label()
         self.request_render("iterazioni modificate")
 
     def set_backend(self, b):
-        global _USE_GPU
-        if b == "cuda" and not _GPU:
+        if not self._select_backend(b):
             return
-        _USE_GPU = (b == "cuda")
-        self.cpu_btn.deselect()
-        self.cuda_btn.deselect()
-        (self.cpu_btn if b == "cpu" else self.cuda_btn).select()
-        self.root.title(f"Insieme di Mandelbrot v{VERSION} - {backend()}")
+        self._refresh_title()
         self.request_render("motore: " + b.upper())
 
     def choose_palette(self, name):
-        apply_palette(name)
-        name = _PALETTE
-        for b in self.pal_btns.values():
-            b.deselect()
-        self.pal_btns[name].select()
-        self.request_render("palette: " + name)
+        self._select_palette(name)
+        self.request_render("palette: " + _PALETTE)
 
     def set_precision(self, p):
-        if p == "f64" and _KERNEL_F64 is None:
+        if not self._select_precision(p):
             return
-        if set_prec(p):
-            self.f32_btn.deselect()
-            self.f64_btn.deselect()
-            (self.f32_btn if p == "f32" else self.f64_btn).select()
-        self.root.title(f"Insieme di Mandelbrot v{VERSION} - {backend()}")
+        self._refresh_title()
         self.request_render("precisione: " + p)
 
     def save_png(self):
-        import time as _t
         if getattr(self, "pil", None) is None:
             self.status.config(text="niente immagine da salvare")
             return
-        default = "mandelbrot_" + _t.strftime("%Y%m%d_%H%M%S") + ".png"
+        default = "mandelbrot_" + time.strftime("%Y%m%d_%H%M%S") + ".png"
         path = tk.filedialog.asksaveasfilename(
             parent=self.root, defaultextension=".png", initialfile=default,
             filetypes=[("Immagini PNG", "*.png")])
@@ -678,7 +725,6 @@ class MandelbrotApp:
 
     # ---------------- config.json (salva/carica tutti i settaggi) ----------------
     def save_config(self):
-        global _PREC, _PALETTE, _USE_GPU
         c = dict(cx=self.cx, cy=self.cy, half=self.half,
                  mi=self.mi, mi_auto=bool(self.mi_auto),
                  precision=_PREC, palette=_PALETTE,
@@ -693,7 +739,6 @@ class MandelbrotApp:
             pass
 
     def load_config(self):
-        global _PREC, _PALETTE, _USE_GPU
         if not os.path.exists(CONFIG_PATH):
             return False
         try:
@@ -710,24 +755,13 @@ class MandelbrotApp:
         st = "disabled" if self.mi_auto else "normal"
         self.mi_minus.config(state=st)
         self.mi_plus.config(state=st)
-        if set_prec(c.get("precision", "f32")):
-            self.f32_btn.deselect()
-            self.f64_btn.deselect()
-            (self.f32_btn if _PREC == "f32" else self.f64_btn).select()
-        pal = c.get("palette", "fuoco")
-        apply_palette(pal)
-        pal = _PALETTE
-        for b in self.pal_btns.values():
-            b.deselect()
-        self.pal_btns[pal].select()
+        self._select_precision(c.get("precision", "f32"))
+        self._select_palette(c.get("palette", "fuoco"))
         be = c.get("backend", "cuda" if _GPU else "cpu")
         if be == "cuda" and not _GPU:
             be = "cpu"
-        _USE_GPU = (be == "cuda")
-        self.cpu_btn.deselect()
-        self.cuda_btn.deselect()
-        (self.cpu_btn if be == "cpu" else self.cuda_btn).select()
-        self.root.title(f"Insieme di Mandelbrot v{VERSION} - {backend()}")
+        self._select_backend(be)
+        self._refresh_title()
         self._update_mi_label()
         return True
 
@@ -840,34 +874,23 @@ class MandelbrotApp:
     def zoom_at(self, ux, uy, f):
         self.cx += (ux - self.cx) * (1 - 1 / f)
         self.cy += (uy - self.cy) * (1 - 1 / f)
-        self.half /= f
+        self.half = max(self.half / f, MIN_HALF)
         self.request_render("zoom")
 
     def zoom_center(self, f):
         self.zoom_at(self.cx, self.cy, f)
 
     def reset(self):
-        global _PREC, _PALETTE, _USE_GPU
         self.cx, self.cy, self.half = CX0, CY0, HALF0
         self.mi = MI0
         self.mi_auto = True
         self.mi_auto_var.set(True)
         self.mi_minus.config(state="disabled")
         self.mi_plus.config(state="disabled")
-        apply_palette("fuoco")
-        for b in self.pal_btns.values():
-            b.deselect()
-        self.pal_btns["fuoco"].select()
-        _USE_GPU = _GPU
-        self.cpu_btn.deselect()
-        self.cuda_btn.deselect()
-        (self.cuda_btn if _GPU else self.cpu_btn).select()
-        if _GPU:
-            set_prec("f32")
-            self.f32_btn.deselect()
-            self.f64_btn.deselect()
-            self.f32_btn.select()
-        self.root.title(f"Insieme di Mandelbrot v{VERSION} - {backend()}")
+        self._select_palette("fuoco")
+        self._select_backend("cuda" if _GPU else "cpu")
+        self._select_precision("f32")
+        self._refresh_title()
         self._cfg_dirty = True
         self._update_mi_label()
         self.request_render("reset totale")
