@@ -1,10 +1,10 @@
 # Convenzioni del progetto
 
 ## Versionamento sorgente (OBBLIGATORIO)
-Ogni modifica a `mandel_interattivo.py` (o ad altri sorgenti Python del
+Ogni modifica a `mandel.py` (o ad altri sorgenti Python del
 progetto) DEVE:
 1. Incrementare la versione nel blocco di commento iniziale del sorgente
-   (attualmente `VERSIONE: 4.0.0` in `mandel_interattivo.py`).
+    (attualmente `VERSIONE: 4.6.0` in `mandel.py`).
     - bugfix = patch (x.y.Z), modifica minima (es. un dialog in piu, un testo,
       un opzione) = patch (x.y.Z), modifica funzionale = minor (x.Y.0),
       riscrittura/architettura = major (X.0.0)

@@ -1,11 +1,23 @@
 # ============================================================================
 # Insieme di Mandelbrot - visualizzatore interattivo
-# VERSIONE: 4.5.1
+# VERSIONE: 4.6.0
 # ----------------------------------------------------------------------------
 # REGOLA: ogni modifica incrementa la versione e aggiunge una voce qui sotto
 # (formato: versione - data - descrizione modifiche).
 #
 # STORICO:
+# 4.6.0 - 2026-08-29
+#   - Nuova palette "Termal": gradiente che parte col ghiaccio (blu/ciano
+#     chiari), passa dal bianco gelido e finisce col fuoco (oro/arancio/rosso).
+#   - Palette gestite da un registro PALETTES ordinato (fuoco/ghiaccio/termal,
+#     ordine = indice passato al kernel): LUT __constant__ e selezione del
+#     kernel, pulsanti UI e config sono tutti generati dal registro
+#     (niente piu' if/else fuoco/ghiaccio).
+# 4.5.3 - 2026-08-29
+#   - Numero di versione nel titolo della finestra ("Insieme di Mandelbrot v4.5.3 - ...")
+# 4.5.2 - 2026-08-29
+#   - Benchmark sempre in float32 (GPU), indipendente da motore/precisione
+#     selezionati nell'app (compute_gpu/compute accettano un prec esplicito)
 # 4.5.1 - 2026-08-29
 #   - Benchmark: prima dell'avvio e' mostrato un dialog che descrive il test
 #     (regione, iterazioni, risoluzione, motore, durata) con OK (avvia) e
@@ -93,6 +105,8 @@ CONFIG_PATH = os.path.join(os.path.expanduser("~"), "mandelbrot", "config.json")
 BENCH = dict(cx=-0.74364388703, cy=0.13182590421, half=0.002,
              mi=3000, w=960, h=540, secs=8.0)
 
+VERSION = "4.6.0"
+
 # ---------------- Palette (LUT 256x3 condivisa CPU/GPU) ----------------
 _FIRE = (
     (0.0, 0.2, 0.45, 0.7, 0.9, 1.0),
@@ -106,6 +120,23 @@ _ICE = (
     (0.02, 0.15, 0.55, 0.85, 1.0),
     (0.10, 0.45, 0.90, 1.0, 1.0),
 )
+# Termal: parte col ghiaccio (blu/ciano chiari), passa dal bianco gelido e
+# finisce col fuoco (oro/arancio/rosso). t=0 ghiaccio, t=1 fuoco.
+_TERMAL = (
+    (0.0,  0.2,  0.4,  0.55, 0.7,  0.85, 1.0),
+    (0.02, 0.10, 0.55, 0.95, 1.00, 1.00, 1.00),
+    (0.08, 0.45, 0.80, 0.96, 0.85, 0.55, 0.30),
+    (0.28, 0.85, 0.95, 0.98, 0.45, 0.20, 0.10),
+)
+
+# Registro palette (fonte unica): l'ordine definisce l'indice passato al kernel
+# (0=fuoco, 1=ghiaccio, 2=termal). UI, config e __constant__ del kernel sono
+# tutti generati da questo dict.
+PALETTES = {
+    "fuoco": _FIRE,
+    "ghiaccio": _ICE,
+    "termal": _TERMAL,
+}
 
 def make_lut(pal):
     st, r, g, b = pal
@@ -117,17 +148,21 @@ def make_lut(pal):
     return (rgb * 255).clip(0, 255).astype(np.uint8)
 
 _PALETTE = "fuoco"
-_LUT = make_lut(_FIRE)
+_LUT = make_lut(PALETTES["fuoco"])
 
 def apply_palette(name):
     global _PALETTE, _LUT
+    if name not in PALETTES:
+        name = "fuoco"
     _PALETTE = name
-    _LUT = make_lut(_FIRE if name == "fuoco" else _ICE)
+    _LUT = make_lut(PALETTES[name])
 
 # ---------------- GPU (CUDA) ----------------
-# Le due palette sono incorporate nel kernel come array __constant__:
+# Tutte le palette (PALETTES) sono incorporate nel kernel come array __constant__:
 # non si passano array device come argomenti (con la LUT come argomento
 # il buffer di output sovrascriveva la memoria della LUT a ogni launch).
+# Le dichiarazioni __constant__ e la selezione per indice pal sono generate
+# dal registro PALETTES (vedi _build_kernel).
 # Il kernel e' generato in due varianti di precisione (float32/float64)
 # dalla stessa sorgente parametrizzata: f32 e' nativa su CUDA, f64 e'
 # corretta ma penalizzata (~1:32 di throughput float) sulle GPU consumer.
@@ -135,8 +170,7 @@ def _fmt_lut(lut):
     return ", ".join(str(int(v)) for v in lut.ravel())
 
 _KERNEL_TPL = r'''
-__constant__ unsigned char LUT_FIRE[768] = { @@FIRE@@ };
-__constant__ unsigned char LUT_ICE[768] = { @@ICE@@ };
+@@CONSTS@@
 
 __device__ __forceinline__ void pal_lut(@@T@@ t, const unsigned char* lut, unsigned char* rgb) {
     int idx = (int)(@@FMIN@@(1.0@@S@@, @@FMAX@@(0.0@@S@@, t)) * 255.0@@S@@);
@@ -184,7 +218,7 @@ extern "C" __global__ void __launch_bounds__(256) @@KNAME@@(
     @@T@@ cx, @@T@@ cy, @@T@@ half,
     int w, int h, int mi)
 {
-    const unsigned char* lut = (pal == 1) ? LUT_ICE : LUT_FIRE;
+    @@LUTSELECT@@
     int tx = blockIdx.x * blockDim.x + threadIdx.x;
     int ty = blockIdx.y * blockDim.y + threadIdx.y;
     int col0 = tx * 2;
@@ -202,9 +236,19 @@ _PRECS = {
 
 def _build_kernel(prec):
     d = _PRECS[prec]
+    # Dichiarazioni __constant__ generate dal registro (una per palette).
+    consts = "\n".join(
+        "__constant__ unsigned char LUT_%s[768] = { %s };"
+        % (name.upper(), _fmt_lut(make_lut(pal)))
+        for name, pal in PALETTES.items())
+    # Selezione LUT per indice pal (ordine PALETTES = indice).
+    names = list(PALETTES)
+    select = "    const unsigned char* lut = LUT_%s;" % names[0].upper()
+    for i, name in enumerate(names[1:], start=1):
+        select += "\n    if (pal == %d) lut = LUT_%s;" % (i, name.upper())
     src = (_KERNEL_TPL
-           .replace("@@FIRE@@", _fmt_lut(make_lut(_FIRE)))
-           .replace("@@ICE@@", _fmt_lut(make_lut(_ICE))))
+           .replace("@@CONSTS@@", consts)
+           .replace("@@LUTSELECT@@", select))
     for k, v in d.items():
         src = src.replace("@@" + k + "@@", v)
     return src, d["KNAME"]
@@ -240,7 +284,7 @@ def set_prec(p):
 def prec():
     return _PREC
 
-def compute_gpu(cx, cy, half, w, h, mi, buf=None):
+def compute_gpu(cx, cy, half, w, h, mi, buf=None, prec=None):
     global _BUF
     need = w * h * 3
     if buf is None:
@@ -250,8 +294,9 @@ def compute_gpu(cx, cy, half, w, h, mi, buf=None):
     out = buf[:need]
     bx, by = 16, 16
     grid = ((w + 2 * bx - 1) // (2 * bx), (h + by - 1) // by)
-    pal = 1 if _PALETTE == "ghiaccio" else 0
-    use64 = (_PREC == "f64") and (_KERNEL_F64 is not None)
+    pal = list(PALETTES).index(_PALETTE)
+    p = prec if prec in ("f32", "f64") else _PREC
+    use64 = (p == "f64") and (_KERNEL_F64 is not None)
     kernel = _KERNEL_F64 if use64 else _KERNEL_F32
     fdt = np.float64 if use64 else np.float32
     args = (out,
@@ -298,10 +343,13 @@ def backend():
         return "CUDA " + _PREC
     return "CPU f64"
 
-def compute(cx, cy, half, w, h, mi, buf=None):
+def compute(cx, cy, half, w, h, mi, buf=None, prec=None):
     if _USE_GPU:
-        return compute_gpu(cx, cy, half, w, h, mi, buf=buf)
+        return compute_gpu(cx, cy, half, w, h, mi, buf=buf, prec=prec)
     return compute_cpu(cx, cy, half, w, h, mi)
+
+def bench_engine():
+    return "CUDA f32" if _GPU else "CPU f64 (GPU non disponibile)"
 
 class MandelbrotApp:
     def __init__(self, root):
@@ -313,7 +361,7 @@ class MandelbrotApp:
                 tkfont.nametofont(_fn).config(size=13)
             except Exception:
                 pass
-        root.title(f"Insieme di Mandelbrot - {backend()}")
+        root.title(f"Insieme di Mandelbrot v{VERSION} - {backend()}")
         self.cx, self.cy, self.half = CX0, CY0, HALF0
         self.mi = MI0
         self.mi_auto = True
@@ -336,11 +384,14 @@ class MandelbrotApp:
         pl = tk.Frame(self.ctl)
         pl.pack(side="left", padx=12)
         tk.Label(pl, text="palette:").pack(side="left")
-        self.fire_btn = tk.Checkbutton(pl, text="Fuoco", command=lambda: self.choose_palette("fuoco"))
-        self.fire_btn.pack(side="left", padx=2, pady=3)
-        self.ice_btn = tk.Checkbutton(pl, text="Ghiaccio", command=lambda: self.choose_palette("ghiaccio"))
-        self.ice_btn.pack(side="left", padx=2, pady=3)
-        self.fire_btn.select()
+        # Pulsanti generati dal registro PALETTES (ordine = indice kernel).
+        self.pal_btns = {}
+        for _name in PALETTES:
+            _b = tk.Checkbutton(pl, text=_name.capitalize(),
+                                command=lambda n=_name: self.choose_palette(n))
+            _b.pack(side="left", padx=2, pady=3)
+            self.pal_btns[_name] = _b
+        self.pal_btns["fuoco"].select()
         pc = tk.Frame(self.ctl)
         pc.pack(side="left", padx=12)
         tk.Label(pc, text="precisione:").pack(side="left")
@@ -536,14 +587,15 @@ class MandelbrotApp:
         self.cpu_btn.deselect()
         self.cuda_btn.deselect()
         (self.cpu_btn if b == "cpu" else self.cuda_btn).select()
-        self.root.title(f"Insieme di Mandelbrot - {backend()}")
+        self.root.title(f"Insieme di Mandelbrot v{VERSION} - {backend()}")
         self.request_render("motore: " + b.upper())
 
     def choose_palette(self, name):
         apply_palette(name)
-        self.fire_btn.deselect()
-        self.ice_btn.deselect()
-        (self.fire_btn if name == "fuoco" else self.ice_btn).select()
+        name = _PALETTE
+        for b in self.pal_btns.values():
+            b.deselect()
+        self.pal_btns[name].select()
         self.request_render("palette: " + name)
 
     def set_precision(self, p):
@@ -553,7 +605,7 @@ class MandelbrotApp:
             self.f32_btn.deselect()
             self.f64_btn.deselect()
             (self.f32_btn if p == "f32" else self.f64_btn).select()
-        self.root.title(f"Insieme di Mandelbrot - {backend()}")
+        self.root.title(f"Insieme di Mandelbrot v{VERSION} - {backend()}")
         self.request_render("precisione: " + p)
 
     def save_png(self):
@@ -613,9 +665,10 @@ class MandelbrotApp:
             (self.f32_btn if _PREC == "f32" else self.f64_btn).select()
         pal = c.get("palette", "fuoco")
         apply_palette(pal)
-        self.fire_btn.deselect()
-        self.ice_btn.deselect()
-        (self.fire_btn if pal == "fuoco" else self.ice_btn).select()
+        pal = _PALETTE
+        for b in self.pal_btns.values():
+            b.deselect()
+        self.pal_btns[pal].select()
         be = c.get("backend", "cuda" if _GPU else "cpu")
         if be == "cuda" and not _GPU:
             be = "cpu"
@@ -623,7 +676,7 @@ class MandelbrotApp:
         self.cpu_btn.deselect()
         self.cuda_btn.deselect()
         (self.cpu_btn if be == "cpu" else self.cuda_btn).select()
-        self.root.title(f"Insieme di Mandelbrot - {backend()}")
+        self.root.title(f"Insieme di Mandelbrot v{VERSION} - {backend()}")
         self._update_mi_label()
         return True
 
@@ -650,7 +703,7 @@ class MandelbrotApp:
             "Benchmark standardizzato\n"
             f"  Regione: c=({BENCH['cx']}, {BENCH['cy']}i), meta={BENCH['half']}\n"
             f"  Iterazioni: {BENCH['mi']}   |   Risoluzione: {BENCH['w']}x{BENCH['h']}\n"
-            f"  Motore: {backend()}\n"
+            f"  Motore: {bench_engine()} (sempre float32, indipendente dai settaggi)\n"
             f"  Durata: {BENCH['secs']:.0f} s (loop continuo, poi report)\n\n"
             "Avviare il benchmark?"
         )
@@ -665,18 +718,24 @@ class MandelbrotApp:
         b = BENCH
         need = b["w"] * b["h"] * 3
         bench_buf = None
-        if _USE_GPU and _GPU:
+        if _GPU:
             try:
                 import cupy as cp
                 bench_buf = cp.empty((need,), dtype=cp.uint8)
             except Exception:
                 bench_buf = None
+        def render():
+            if _GPU:
+                # benchmark sempre in float32, indipendentemente dai settaggi
+                return compute_gpu(b["cx"], b["cy"], b["half"], b["w"], b["h"],
+                                   b["mi"], buf=bench_buf, prec="f32")
+            return compute_cpu(b["cx"], b["cy"], b["half"], b["w"], b["h"], b["mi"])
         t_end = time.perf_counter() + b["secs"]
         count = 0
         err = None
         while time.perf_counter() < t_end:
             try:
-                compute(b["cx"], b["cy"], b["half"], b["w"], b["h"], b["mi"], buf=bench_buf)
+                render()
                 count += 1
             except Exception as ex:
                 err = str(ex)
@@ -687,7 +746,7 @@ class MandelbrotApp:
 
     def _bench_done(self, count, secs, err):
         self._bench_running = False
-        eng = backend()
+        eng = bench_engine()
         if count > 0:
             msg = (f"Completati {count} rendering in {secs:.1f} s\n"
                    f"  {count/secs:.2f} rendering/s   |   {secs/count*1000:.0f} ms ciascuno\n\n"
@@ -745,9 +804,9 @@ class MandelbrotApp:
         self.mi_minus.config(state="disabled")
         self.mi_plus.config(state="disabled")
         apply_palette("fuoco")
-        self.fire_btn.deselect()
-        self.ice_btn.deselect()
-        self.fire_btn.select()
+        for b in self.pal_btns.values():
+            b.deselect()
+        self.pal_btns["fuoco"].select()
         _USE_GPU = _GPU
         self.cpu_btn.deselect()
         self.cuda_btn.deselect()
@@ -757,7 +816,7 @@ class MandelbrotApp:
             self.f32_btn.deselect()
             self.f64_btn.deselect()
             self.f32_btn.select()
-        self.root.title(f"Insieme di Mandelbrot - {backend()}")
+        self.root.title(f"Insieme di Mandelbrot v{VERSION} - {backend()}")
         self._cfg_dirty = True
         self._update_mi_label()
         self.request_render("reset totale")
