@@ -10,8 +10,9 @@
   Uso: `python baseline.py [path/mandel.py]`.
 - `gate.py` — gate di correttezza permanente (vedi voce 'Gate correttezza').
   Uso: `python gate.py [path/mandel.py]`; exit 0 = PASS.
-- `baseline/*.npy` — frame di riferimento (3 zone × GPU f32/f64 + CPU v5 +
-  CPU v4.15.1); usati solo dal gate. `baseline.txt` = ultimo report misure.
+- `baseline/*.npy` — frame di riferimento (3 zone × GPU f32/f64 + CPU v5.2.0 +
+  CPU v4.15.1 storica); usati dal gate (la v4.15.1 è solo di storico). `baseline.txt`
+  = ultimo report misure.
 - `PIANO-REINGEGNERIZZAZIONE.md` — piano storico della reingegnerizzazione v5
   (fatto; conservato come documento di decisioni, non da aggiornare a ogni fix).
 - `mandelbrot_*.json` — zone salvate dall'app (dato utente, gitignorato).
@@ -74,12 +75,16 @@ e si trova in cima al file.
   e' visto (il check in-kernel `ncol=0` non scattava mai). La cancellazione
   cooperativa va fatta a livello Python: bande di righe + check tra le bande.
   Nessun `fma` disponibile in numba (verificato).
-- **Gate correttezza (gate.py, v5)**: GPU bit-identico a `baseline/*_gpu_*.npy`
-  (riferimenti v4.15.1); CPU bit-identica a `baseline/*_cpu.npy` (riferimenti v5.0.0,
-  nuova verità) E continuità ≤1,5% dei pixel vs `baseline/*_cpu_v4151.npy` (effetto
-  FMA documentato). Rigenerare i riferimenti CPU con `baseline.py` dopo ogni cambio
-  semantico del percorso CPU; i riferimenti GPU restano validi finché il kernel CUDA
-  non cambia.
+- **Gate correttezza (gate.py, v5.2.0)**: GPU f32/f64 **bit-identici** a
+  `baseline/*_gpu_*.npy` (riferimenti v4.15.1, validi finché il kernel CUDA non
+  cambia); CPU **bit-identica** a `baseline/*_cpu.npy` (riferimenti v5.2.0, nuova
+  verità); CPU e GPUf64 devono rendere la **stessa immagine**: ≤2% dei pixel con
+  max diff per canale > 8 (misurato 0,011–0,75%: solo bordo caotico + 1-2 ULP di
+  `log2`/`log` libm-vs-CUDA). Rigenerare i riferimenti CPU con `baseline.py` dopo
+  ogni cambio semantico del percorso CPU. (v≤5.1.2: la CPU aveva il check di
+  continuità ≤1,5% vs `baseline/*_cpu_v4151.npy`, riferimento storico ancora
+  presente ma non più usato dal gate — la formula di coloring è cambiata
+  volutamente in v5.2.0.)
 - Ambiente: la GPU è condivisa con il server LLM locale (llama.cpp) che NON va
   fermato (l'agente gira su quello stesso server). I benchmark GPU hanno rumore di
   fondo: usare workload bounded (n launch fissi, non loop a tempo) e confrontare

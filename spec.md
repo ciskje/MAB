@@ -1,7 +1,7 @@
 # Visualizzatore Mandelbrot — spec di ricreazione
 
 Descrizione concisa ma sufficiente perché un altro LLM (o sviluppatore) ricrei il
-programma da zero. Riferimento: `mandel.py` (un solo file), sincronizzata alla **v5.0.0**.
+programma da zero. Riferimento: `mandel.py` (un solo file), sincronizzata alla **v5.2.0**.
 Ogni modifica al sorgente DEVE aggiornare anche questa spec (vedi AGENTS.md).
 
 ## Panoramica
@@ -28,7 +28,12 @@ Ogni modifica al sorgente DEVE aggiornare anche questa spec (vedi AGENTS.md).
   iterazioni. Bit-identico al kernel senza test.
 - **GPU**: iterazione in coordinata spostata `w = z − cx` (solo parte reale, stabilità
   numerica); coloring continuo `nu = it + 1 − log2(0.5·ln|z|²)`, `t = (nu/mi)^0.35`.
-  **CPU**: `t = (it/mi)^0.35`.
+  **CPU** (v5.2.0): **stesso** coloring continuo della GPU `nu = it + 1 − log2(0.5·ln|z|²)`,
+  `t = (nu/mi)^0.35` (il kernel Numba/fallback esportano anche `mag = |z|²` alla fuga);
+  solo i pixel mai fuggiti (`mag==0`) restano neri. CPU e CUDA producono lo stesso colore
+  (a parte 1-2 ULP di `log2`/`log` libm-vs-CUDA → ≤1 entry di LUT; verificato dal gate).
+  (v≤5.1.x: `t=(it/mi)^0.35` + `rgb[it==0]=0`, che anneriva anche i punti "lontani" fuggiti
+  alla 1ª iterazione — bug CPU-nero/CUDA-rosso, corretto in v5.2.0).
 - **LUT 256×3** condivisa CPU/GPU: `np.interp` delle stop su 256 punti, ×255, clip, uint8;
   colore = `LUT[round(t·255)]`.
 - **Kernel GPU**: 1 px/thread (v5.0.0: micro-benchmark A/B, 1.8× su z1 / 1.1× su z3
@@ -47,9 +52,10 @@ Ogni modifica al sorgente DEVE aggiornare anche questa spec (vedi AGENTS.md).
   render.
 - **CPU (v5.0.0)**: escape loop in **Numba** `@njit(parallel=True)` (dipendenza
   opzionale): parallelo sulle righe (`prange`), early-exit per pixel, f64; geometry,
-  interior analitico e coloring restano in numpy (il kernel Numba produce solo `it[]`).
-  **Self-test di bit-identità** all'avvio (thread, 4×4 con casi limite vs il loop numpy di
-  riferimento) → se fallisce o Numba è assente, **fallback numpy automatico** (stesso loop,
+  interior analitico e coloring restano in numpy (il kernel Numba produce `it[]` e,
+  da v5.2.0, `mag[] = |z|²` alla fuga, usato dal coloring smooth).
+  **Self-test di bit-identità** all'avvio (thread, 4×4 con casi limite, `it[]` **e** `mag[]`,
+  vs il loop numpy di riferimento) → se fallisce o Numba è assente, **fallback numpy automatico** (stesso loop,
   stesso gate). Warmup/compilazione Numba in thread all'avvio (fuori dal primo render).
   **Cancellazione cooperativa**: ogni nuovo job incrementa il contatore di
   "generazione" (`_GEN`); il percorso Numba divide le righe in **16 bande** e
@@ -143,8 +149,11 @@ da questo registro.
   piccolissima frazione di pixel di bordo (0.01–0.8% a seconda dello zoom). Regola:
   in tutto il codice CPU il quadrato complesso va fatto in parti esplicite
   (`a*a-b*b`, `2*a*b` con ufunc singoli) → percorso Numba e fallback numpy restano
-  bit-identici tra loro. Contro i frame v4.x (np.square) il gate CPU accetta
-  ≤1.5% di pixel diversi (solo bordo caotico); GPU bit-identico.
+  bit-identici tra loro. Gate v5.2.0: GPU f32/f64 e CPU **bit-identici** ai loro
+  riferimenti `baseline/*.npy`; CPU e GPUf64 devono rendere la **stessa immagine**
+  (≤2% di pixel con max diff per canale > 8 — solo bordo caotico + 1-2 ULP di
+  `log2`/`log` libm-vs-CUDA). (v5.0.0: il gate CPU era bit-id vs `*_cpu.npy` +
+  continuità ≤1.5% vs `*_cpu_v4151.npy`, riferimento storico ancora in `baseline/`.)
 - **Modello di memoria Numba (scoperta v5.0.0)**: dentro `prange` la lettura di una
   memoria scritta da un altro thread **non è affidabile**: Numba/LLVM fa hoisting del
   load fuori dal loop (semantica single-thread), quindi un bump cross-thread non è

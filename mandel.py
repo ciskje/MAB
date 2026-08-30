@@ -1,11 +1,34 @@
 # ============================================================================
 # Insieme di Mandelbrot - visualizzatore interattivo
-# VERSIONE: 5.1.2
+# VERSIONE: 5.2.0
 # ----------------------------------------------------------------------------
 # REGOLA: ogni modifica incrementa la versione e aggiunge una voce qui sotto
 # (formato: versione - data - descrizione modifiche).
 #
 # STORICO:
+# 5.2.0 - 2026-08-30
+#   - FIX (CPU vs CUDA): la regione LONTANA dall'origine (punti che fuggono
+#     alla 1a iterazione, it=0) era NERA in CPU ma ROSSASTRA in CUDA. Causa:
+#     la CPU usava il coloring grezzo t=(it/mi)^0.35 e la riga rgb[it==0]=0
+#     (servita a annerire i pixel INTERIORI) che colpireva anche i punti
+#     fuggiti a it=0; la GPU invece usa lo smooth-iteration
+#     nu = it+1-log2(0.5*ln|z|^2) (>0 per i punti lontani) e annerisce solo
+#     i non-fuggiti (flag esc). Ora la CPU usa lo STESSO coloring della GPU:
+#     il kernel Numba e il fallback numpy esportano anche mag=|z|^2 alla fuga;
+#     la colorazione e' nu=it+1-log2(0.5*ln(mag)), t=(nu/mi)^0.35, e solo i
+#     pixel mai fuggiti (mag==0) restano neri. CPU e CUDA ora producono lo
+#     stesso colore (a parte 1-2 ULP di log2/log libm vs CUDA -> <=1 entry LUT;
+#     documentato nel gate).
+#   - Gate: il vecchio check CPU "continuita' <=1.5% dei pixel vs v4.15.1"
+#     (pensato per l'effetto FMA) e' SOSTITUITO da un check piu' forte e
+#     diretto: CPU e GPUf64 devono rendere la STESSA immagine (<=2% dei pixel
+#     con max diff per canale > 8; misurato 0.011-0.75%: solo bordo caotico +
+#     1-2 ULP di log2/log libm-vs-CUDA). Il confronto-pixel vs v4.15.1 non ha
+#     piu' senso: la formula di coloring e' cambiata VOLUTARIAMENTE, quindi
+#     tutta l'immagine si ri-colore di poco (baseline/*_cpu_v4151.npy resta
+#     come riferimento storico, non piu' usato dal gate).
+#   - Riferimenti CPU baseline/*_cpu.npy RIGENERATI (nuova formula); GPU
+#     invariati (kernel non toccato).
 # 5.1.2 - 2026-08-30
 #   - All'avvio il programma parte SEMPRE con la configurazione di default:
 #     vista sull'INTERO insieme di Mandelbrot (CX0/CY0/HALF0) + MI auto, come
@@ -306,7 +329,7 @@ CONFIG_PATH = os.path.join(os.path.expanduser("~"), "mandelbrot", "config.json")
 BENCH = dict(cx=-0.7499302568795561, cy=-0.015139113925433963, half=5.226737155905588e-05,
              w=960, h=540, secs=8.0)
 
-VERSION = "5.1.2"
+VERSION = "5.2.0"
 
 # ---------------- Palette (LUT 256x3 condivisa CPU/GPU) ----------------
 _FIRE = (
@@ -584,7 +607,7 @@ try:
     # loader dinamico) -> il load della cache falliva. La compilazione (~1-2 s)
     # e' pagata dal thread di warmup all'avvio, prima del primo render CPU.
     @njit(parallel=True)
-    def _mandel_escape(c, diverged, it, mi, row0, row1):
+    def _mandel_escape(c, diverged, it, mag, mi, row0, row1):
         # Solo il loop di fuga sulle righe [row0, row1). La cancellazione
         # cooperativa e' gestita dal chiamante (compute_cpu) a livello
         # PYTHON, tra bande di righe: un check in-kernel di un contatore
@@ -608,6 +631,7 @@ try:
                     z_im += vim
                     if z_re * z_re + z_im * z_im > 4.0:
                         it[row, col] = i
+                        mag[row, col] = z_re * z_re + z_im * z_im
                         break
 except Exception:
     njit = None
@@ -634,7 +658,8 @@ def _numba_warmup():
         d = np.zeros((4, 4), dtype=bool)
         d[0, 0] = True  # pre-diverged (come il prefiltro interior)
         it_numba = np.zeros((4, 4), dtype=np.int32)
-        _mandel_escape(c, d, it_numba, 64, 0, 4)
+        mag_numba = np.zeros((4, 4))
+        _mandel_escape(c, d, it_numba, mag_numba, 64, 0, 4)
         # riferimento numpy con la STESSA aritmetica del fallback in
         # compute_cpu (parti esplicite, no FMA) — il risultato DEVE essere
         # bit-identico al kernel Numba.
@@ -644,6 +669,7 @@ def _numba_warmup():
         ci = c.imag
         div = d.copy()
         it_ref = np.zeros((4, 4), dtype=np.int32)
+        mag_ref = np.zeros((4, 4))
         with np.errstate(over="ignore", invalid="ignore"):
             for i in range(64):
                 if not (~div).any():
@@ -657,13 +683,15 @@ def _numba_warmup():
                     continue
                 div |= m
                 it_ref[m] = i
-        if not np.array_equal(it_numba, it_ref):
+                mag_ref[m] = zr[m] * zr[m] + zi[m] * zi[m]
+        if not (np.array_equal(it_numba, it_ref) and np.array_equal(mag_numba, mag_ref)):
             return  # bit-identita' violata: resta il fallback numpy
         # warmup: compila il percorso parallelo a dimensioni realistiche
         c2 = np.zeros((64, 64), dtype=np.complex128)
         d2 = np.zeros((64, 64), dtype=bool)
         it2 = np.zeros((64, 64), dtype=np.int32)
-        _mandel_escape(c2, d2, it2, 32, 0, 64)
+        mag2 = np.zeros((64, 64))
+        _mandel_escape(c2, d2, it2, mag2, 32, 0, 64)
         _NUMBA_OK = True
     except Exception:
         pass
@@ -691,6 +719,9 @@ def _cpu_ws(w, h):
             "ti": np.empty((h, w)),
             "diverged": np.empty((h, w), dtype=bool),
             "it": np.empty((h, w), dtype=np.int32),
+            # v5.2.0: |z|^2 al momento della fuga (coloring smooth, come la GPU);
+            # 0 = mai fuggito (interiore).
+            "mag": np.empty((h, w)),
         }
         if len(_CPU_WS) >= 3:
             _CPU_WS.pop(next(iter(_CPU_WS)))
@@ -721,6 +752,8 @@ def compute_cpu(cx, cy, half, w, h, mi, my_gen=0):
     diverged.fill(False)
     it = ws["it"]
     it.fill(0)
+    mag = ws["mag"]
+    mag.fill(0.0)
     # Interior analitico (stesso criterio del kernel GPU): bulbo periodica-2 +
     # cardioide principale (|1 - sqrt(1 - 4c)| < 1). Questi pixel non divergono
     # mai -> restano it=0 (neri) ed esclusi dal loop: ~2.5x sulla CPU.
@@ -742,7 +775,7 @@ def compute_cpu(cx, cy, half, w, h, mi, my_gen=0):
         for b0 in range(0, h, band):
             if my_gen != 0 and _GEN[0] != my_gen:
                 break  # job obsoleto: stop (il worker scarta il frame)
-            _mandel_escape(c, diverged, it, mi, b0, min(b0 + band, h))
+            _mandel_escape(c, diverged, it, mag, mi, b0, min(b0 + band, h))
     else:
         # Fallback numpy (e riferimento del gate di correttezza).
         # v5.0.0: quadrato complesso in parti esplicite (a*a-b*b, 2*a*b con
@@ -773,10 +806,23 @@ def compute_cpu(cx, cy, half, w, h, mi, my_gen=0):
                     continue
                 diverged |= m
                 it[m] = i
-    t = np.power(np.clip(it / mi, 0.0, 1.0), 0.35).ravel()
+                mag[m] = zr[m] * zr[m] + zi[m] * zi[m]
+    # v5.2.0: coloring IDENTICO al kernel GPU (smooth iteration):
+    # nu = it + 1 - log2(0.5*ln|z|^2), t = (nu/mi)^0.35, dove |z|^2 e' il
+    # modulo al momento della fuga (mag, > 4). I pixel mai fuggiti
+    # (mag == 0) restano neri. (v<=5.1.x: t=(it/mi)^0.35 + rgb[it==0]=0,
+    # che confondeva "interiore" con "fuggito alla 1a iterazione" e
+    # anneriva la regione lontana, dove la GPU dava il rosso scuro LUT[0..].)
+    # NB: log2/log CPU (libm) vs device (CUDA) possono differire di 1-2 ULP
+    # -> al massimo 1 entry di LUT di differenza vs GPU f64 (documentato
+    # nel gate: check CPU-vs-GPUf64 con bound piccolo).
+    esc = mag > 0.0
+    nu = np.zeros((h, w))
+    nu[esc] = it[esc].astype(np.float64) + 1.0 - np.log2(0.5 * np.log(mag[esc]))
+    t = np.power(np.clip(nu / mi, 0.0, 1.0), 0.35).ravel()
     idx = (t * 255).astype(np.uint8)
     rgb = _LUT[idx].reshape((h, w, 3)).copy()
-    rgb[it == 0] = 0
+    rgb[~esc] = 0
     return Image.fromarray(rgb)
 
 # ---------------- Dispatch backend ----------------

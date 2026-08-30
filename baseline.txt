@@ -1,21 +1,21 @@
-BASELINE mandel v5.0.0 — 2026-08-30 18:11:31
+BASELINE mandel v5.1.2 — 2026-08-30 19:02:09
 GPU: NVIDIA GeForce RTX 4070 SUPER | cupy 14.2.0 | numpy 2.4.6 | python 3.12.9
 Risoluzione: 960x540 | run: mediana di 3 (1 warmup) | palette: fuoco | mi = auto_mi(half)
 
 === z1_init  c=(-0.5, 0i)  half=1.5  mi=2000
-  GPU f32: kernel     0.19 ms | D2H    0.38 ms | PIL  0.36 ms | totale     0.99 ms  (~1009.4 render/s)
-  GPU f64: kernel     6.69 ms | D2H    0.43 ms | PIL  0.38 ms | totale     7.58 ms  (~132.0 render/s)
-  CPU   : totale    30.02 ms | allocazioni+prefiltro ~ 13.41 ms  (~33.31 render/s)
+  GPU f32: kernel     0.21 ms | D2H    0.39 ms | PIL  0.38 ms | totale     1.12 ms  (~890.0 render/s)
+  GPU f64: kernel     5.73 ms | D2H    0.42 ms | PIL  0.36 ms | totale     6.54 ms  (~153.0 render/s)
+  CPU   : totale    44.37 ms | allocazioni+prefiltro ~ 15.31 ms  (~22.54 render/s)
 
 === z2_med  c=(-0.7435, 0.1314i)  half=0.001  mi=8352
-  GPU f32: kernel     0.36 ms | D2H    0.33 ms | PIL  0.33 ms | totale     0.98 ms  (~1019.3 render/s)
-  GPU f64: kernel     8.16 ms | D2H    0.38 ms | PIL  0.37 ms | totale     8.58 ms  (~116.6 render/s)
-  CPU   : totale    30.63 ms | allocazioni+prefiltro ~ 13.80 ms  (~32.65 render/s)
+  GPU f32: kernel     0.36 ms | D2H    0.41 ms | PIL  0.39 ms | totale     1.04 ms  (~963.3 render/s)
+  GPU f64: kernel     8.09 ms | D2H    0.44 ms | PIL  0.35 ms | totale     8.82 ms  (~113.4 render/s)
+  CPU   : totale    41.42 ms | allocazioni+prefiltro ~ 14.37 ms  (~24.14 render/s)
 
 === z3_cusp  c=(-0.7499302568795561, -0.01513911392543396i)  half=5.22674e-05  mi=10915
-  GPU f32: kernel     3.31 ms | D2H    0.37 ms | PIL  0.33 ms | totale     3.95 ms  (~253.1 render/s)
-  GPU f64: kernel   140.77 ms | D2H    0.43 ms | PIL  0.35 ms | totale   140.37 ms  (~7.1 render/s)
-  CPU   : totale   152.29 ms | allocazioni+prefiltro ~ 13.95 ms  (~6.57 render/s)
+  GPU f32: kernel     3.32 ms | D2H    0.36 ms | PIL  0.36 ms | totale     4.00 ms  (~250.1 render/s)
+  GPU f64: kernel   142.65 ms | D2H    0.44 ms | PIL  0.37 ms | totale   139.82 ms  (~7.2 render/s)
+  CPU   : totale   164.00 ms | allocazioni+prefiltro ~ 14.49 ms  (~6.10 render/s)
 
 Reference frame salvati in: Z:\Lavorazioni\2026\AI\mandelbrot\baseline
   z1_init_cpu.npy (1.56 MB)
