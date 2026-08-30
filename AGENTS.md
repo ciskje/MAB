@@ -10,9 +10,9 @@
   Uso: `python baseline.py [path/mandel.py]`.
 - `gate.py` — gate di correttezza permanente (vedi voce 'Gate correttezza').
   Uso: `python gate.py [path/mandel.py]`; exit 0 = PASS.
-- `baseline/*.npy` — frame di riferimento (3 zone × GPU f32/f64 + CPU v5.2.0 +
-  CPU v4.15.1 storica); usati dal gate (la v4.15.1 è solo di storico). `baseline.txt`
-  = ultimo report misure.
+- `baseline/*.npy` — frame di riferimento (3 zone × GPU f32/f64 + CPU v5.2.x);
+  usati dal gate. (I riferimenti CPU v4.15.1 storici sono stati rimossi in v5.2.1,
+  recuperabili dalla storia git.) `baseline.txt` = ultimo report misure.
 - `PIANO-REINGEGNERIZZAZIONE.md` — piano storico della reingegnerizzazione v5
   (fatto; conservato come documento di decisioni, non da aggiornare a ogni fix).
 - `mandelbrot_*.json` — zone salvate dall'app (dato utente, gitignorato).
@@ -82,9 +82,9 @@ e si trova in cima al file.
   max diff per canale > 8 (misurato 0,011–0,75%: solo bordo caotico + 1-2 ULP di
   `log2`/`log` libm-vs-CUDA). Rigenerare i riferimenti CPU con `baseline.py` dopo
   ogni cambio semantico del percorso CPU. (v≤5.1.2: la CPU aveva il check di
-  continuità ≤1,5% vs `baseline/*_cpu_v4151.npy`, riferimento storico ancora
-  presente ma non più usato dal gate — la formula di coloring è cambiata
-  volutamente in v5.2.0.)
+  continuità ≤1,5% vs `baseline/*_cpu_v4151.npy` — riferimenti rimossi in v5.2.1,
+  recuperabili dalla storia git; la formula di coloring è cambiata volutamente in
+  v5.2.0.)
 - Ambiente: la GPU è condivisa con il server LLM locale (llama.cpp) che NON va
   fermato (l'agente gira su quello stesso server). I benchmark GPU hanno rumore di
   fondo: usare workload bounded (n launch fissi, non loop a tempo) e confrontare

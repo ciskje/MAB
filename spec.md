@@ -1,7 +1,7 @@
 # Visualizzatore Mandelbrot — spec di ricreazione
 
 Descrizione concisa ma sufficiente perché un altro LLM (o sviluppatore) ricrei il
-programma da zero. Riferimento: `mandel.py` (un solo file), sincronizzata alla **v5.2.0**.
+programma da zero. Riferimento: `mandel.py` (un solo file), sincronizzata alla **v5.2.1**.
 Ogni modifica al sorgente DEVE aggiornare anche questa spec (vedi AGENTS.md).
 
 ## Panoramica
@@ -153,7 +153,8 @@ da questo registro.
   riferimenti `baseline/*.npy`; CPU e GPUf64 devono rendere la **stessa immagine**
   (≤2% di pixel con max diff per canale > 8 — solo bordo caotico + 1-2 ULP di
   `log2`/`log` libm-vs-CUDA). (v5.0.0: il gate CPU era bit-id vs `*_cpu.npy` +
-  continuità ≤1.5% vs `*_cpu_v4151.npy`, riferimento storico ancora in `baseline/`.)
+  continuità ≤1.5% vs `*_cpu_v4151.npy` — riferimenti storici rimossi in v5.2.1,
+  recuperabili dalla storia git.)
 - **Modello di memoria Numba (scoperta v5.0.0)**: dentro `prange` la lettura di una
   memoria scritta da un altro thread **non è affidabile**: Numba/LLVM fa hoisting del
   load fuori dal loop (semantica single-thread), quindi un bump cross-thread non è

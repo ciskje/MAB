@@ -1,11 +1,16 @@
 # ============================================================================
 # Insieme di Mandelbrot - visualizzatore interattivo
-# VERSIONE: 5.2.0
+# VERSIONE: 5.2.1
 # ----------------------------------------------------------------------------
 # REGOLA: ogni modifica incrementa la versione e aggiunge una voce qui sotto
 # (formato: versione - data - descrizione modifiche).
 #
 # STORICO:
+# 5.2.1 - 2026-08-30
+#   - Cleanup: rimossi i riferimenti storici baseline/*_cpu_v4151.npy (3 file,
+#     non piu' usati dal gate da v5.2.0; recuperabili dalla storia git).
+#     Aggiornate le menzioni in spec.md/AGENTS.md/gate.py. Nessun cambio di
+#     codice/comportamento (solo rimozione dati + docs).
 # 5.2.0 - 2026-08-30
 #   - FIX (CPU vs CUDA): la regione LONTANA dall'origine (punti che fuggono
 #     alla 1a iterazione, it=0) era NERA in CPU ma ROSSASTRA in CUDA. Causa:
@@ -329,7 +334,7 @@ CONFIG_PATH = os.path.join(os.path.expanduser("~"), "mandelbrot", "config.json")
 BENCH = dict(cx=-0.7499302568795561, cy=-0.015139113925433963, half=5.226737155905588e-05,
              w=960, h=540, secs=8.0)
 
-VERSION = "5.2.0"
+VERSION = "5.2.1"
 
 # ---------------- Palette (LUT 256x3 condivisa CPU/GPU) ----------------
 _FIRE = (

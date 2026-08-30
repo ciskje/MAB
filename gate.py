@@ -15,7 +15,8 @@
 #       VOLUTARIAMENTE (smooth iteration, come la GPU) per il bug
 #       "regione lontana nera in CPU ma rossa in CUDA" (v<=5.1.x:
 #       rgb[it==0]=0 confondeva interiore con fuga a 1a iterazione).
-#       baseline/*_cpu_v4151.npy resta come riferimento storico.
+#       (I riferimenti baseline/*_cpu_v4151.npy sono stati rimossi in v5.2.1,
+#       recuperabili dalla storia git.)
 # Uso: python gate.py [path/mandel.py]
 import importlib.util
 import os
