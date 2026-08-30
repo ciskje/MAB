@@ -10,6 +10,8 @@ progetto) DEVE:
       riscrittura/architettura = major (X.0.0)
 2. Aggiungere una voce allo STORICO nello stesso blocco, formato:
    `VERSIONE - AAAA-MM-GG - descrizione delle modifiche`.
+3. Aggiornare `spec.md` in modo che rispecchi il nuovo stato del programma
+   (la spec DEVE restare sempre in sincronia col sorgente).
 Il blocco è intitolato "Insieme di Mandelbrot - visualizzatore interattivo"
 e si trova in cima al file.
 
