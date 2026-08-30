@@ -104,9 +104,13 @@ da questo registro.
   non viene più ripristinato dalla config) → "Salva zona" chiede sempre il nome finché
   l'utente non carica/salva esplicitamente una zona in quella sessione.
 - **Config**: `~\mandelbrot\config.json` con
-  `cx, cy, half, mi, mi_auto, precision, palette, backend, bench` (`view_file` non è
-  più persistito, v5.1.1; eventuali vecchi valori in config esistenti sono ignorati);
-  salvata all'uscita e **throttled ~1 s** sui cambiamenti; reset riporta i default.
+  `precision, palette, backend, bench` (la **vista** `cx, cy, half, mi, mi_auto` e
+  `view_file` non sono più persistite: v5.1.1/v5.1.2, eventuali vecchi valori in
+  config esistenti sono ignorati); salvata all'uscita e **throttled ~1 s** sui
+  cambiamenti; reset riporta i default.
+- **Avvio (v5.1.2)**: il programma parte SEMPRE con la configurazione di default —
+  vista sull'intero insieme di Mandelbrot (`cx=-0.5, cy=0, half=1.5`) + MI auto —
+  come la prima volta; la vista precedente si recupera solo con "Carica zona…".
 
 ## Benchmark
 - Dialog di conferma custom (`Toplevel` modale centrato, griglia parametri, Avvia/Annulla,

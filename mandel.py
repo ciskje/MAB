@@ -1,11 +1,19 @@
 # ============================================================================
 # Insieme di Mandelbrot - visualizzatore interattivo
-# VERSIONE: 5.1.1
+# VERSIONE: 5.1.2
 # ----------------------------------------------------------------------------
 # REGOLA: ogni modifica incrementa la versione e aggiunge una voce qui sotto
 # (formato: versione - data - descrizione modifiche).
 #
 # STORICO:
+# 5.1.2 - 2026-08-30
+#   - All'avvio il programma parte SEMPRE con la configurazione di default:
+#     vista sull'INTERO insieme di Mandelbrot (CX0/CY0/HALF0) + MI auto, come
+#     la prima volta. Lo stato della vista (cx, cy, half, mi, mi_auto) NON viene
+#     piu' ripristinato da config.json (vecchi valori ignorati); la vista si
+#     recupera solo caricando esplicitamente un file zona ('Carica zona...').
+#     La vista non e' piu' neppure salvata in config (dato morto); la persiste
+#     solo il file zona. Precisione/palette/motore/benchmark restano persistiti.
 # 5.1.1 - 2026-08-30
 #   - All'avvio NON viene piu' ripristinato il file di zona corrente (view_file)
 #     da config.json: il programma parte SENZA file corrente, quindi 'Salva zona'
@@ -298,7 +306,7 @@ CONFIG_PATH = os.path.join(os.path.expanduser("~"), "mandelbrot", "config.json")
 BENCH = dict(cx=-0.7499302568795561, cy=-0.015139113925433963, half=5.226737155905588e-05,
              w=960, h=540, secs=8.0)
 
-VERSION = "5.1.1"
+VERSION = "5.1.2"
 
 # ---------------- Palette (LUT 256x3 condivisa CPU/GPU) ----------------
 _FIRE = (
@@ -1280,13 +1288,14 @@ class MandelbrotApp:
         self.request_render("zona caricata: " + os.path.basename(path))
 
     def save_config(self):
-        c = dict(cx=self.cx, cy=self.cy, half=self.half,
-                 mi=self.mi, mi_auto=bool(self.mi_auto),
-                 precision=_PREC, palette=_PALETTE,
+        # v5.1.2: la VISTA (cx/cy/half/mi) non e' piu' persistita in config:
+        # l'app parte sempre con la configurazione di default (intero insieme,
+        # MI auto); la vista si salva solo col file zona ('Salva zona').
+        # NB: view_file NON e' persistito (v5.1.1): 'Salva zona' chiede sempre
+        # il nome finche' non si carica/salva una zona in quella sessione.
+        c = dict(precision=_PREC, palette=_PALETTE,
                  backend=("cuda" if _USE_GPU else "cpu"),
                  bench=dict(self.bench))
-        # NB: view_file NON e' persistito (v5.1.1): all'avvio il programma deve
-        # partire senza file corrente, cosi' 'Salva zona' chiede sempre il nome.
         try:
             d = os.path.dirname(CONFIG_PATH)
             if d:
@@ -1304,20 +1313,13 @@ class MandelbrotApp:
                 c = json.load(f)
         except Exception:
             return False
-        self.cx = float(c.get("cx", self.cx))
-        self.cy = float(c.get("cy", self.cy))
-        self.half = float(c.get("half", self.half))
-        self.mi = int(c.get("mi", self.mi))
-        self.mi_auto = bool(c.get("mi_auto", self.mi_auto))
+        # v5.1.2: la vista (cx, cy, half, mi, mi_auto) NON viene ripristinata:
+        # l'app parte SEMPRE con la configurazione di default (intero insieme,
+        # MI auto, come la prima volta). I vecchi valori in config sono
+        # ignorati; la vista si recupera solo con 'Carica zona...'.
+        # v5.1.1: view_file non viene ripristinato: 'Salva zona' chiede sempre
+        # il nome finche' non si carica/salva una zona in questa sessione.
         self._load_bench(c.get("bench"))
-        # NB: view_file NON viene ripristinato (v5.1.1): all'avvio il programma
-        # parte senza file corrente (eventuali vecchi 'view_file' nella config
-        # esistente sono ignorati); 'Salva zona' chiede sempre il nome finche'
-        # l'utente non carica/salva esplicitamente una zona in questa sessione.
-        self.mi_auto_var.set(self.mi_auto)
-        st = "disabled" if self.mi_auto else "normal"
-        self.mi_minus.config(state=st)
-        self.mi_plus.config(state=st)
         self._select_precision(c.get("precision", "f32"))
         self._select_palette(c.get("palette", "fuoco"))
         be = c.get("backend", "cuda" if _GPU else "cpu")
