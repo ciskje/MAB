@@ -1,11 +1,17 @@
 # ============================================================================
 # Insieme di Mandelbrot - visualizzatore interattivo
-# VERSIONE: 5.1.0
+# VERSIONE: 5.1.1
 # ----------------------------------------------------------------------------
 # REGOLA: ogni modifica incrementa la versione e aggiunge una voce qui sotto
 # (formato: versione - data - descrizione modifiche).
 #
 # STORICO:
+# 5.1.1 - 2026-08-30
+#   - All'avvio NON viene piu' ripristinato il file di zona corrente (view_file)
+#     da config.json: il programma parte SENZA file corrente, quindi 'Salva zona'
+#     chiede SEMPRE il nome (dialog Salva con nome...) finche' l'utente non
+#     carica o salva esplicitamente una zona. view_file rimosso anche dalla
+#     config salvata (dato morto: non viene piu' letto).
 # 5.1.0 - 2026-08-30
 #   - Benchmark: ora eseguito nella MODALITA' CORRENTE dell'app (motore
 #     CPU/CUDA + precisione f32/f64 selezionati), invece che sempre in CUDA f32
@@ -292,7 +298,7 @@ CONFIG_PATH = os.path.join(os.path.expanduser("~"), "mandelbrot", "config.json")
 BENCH = dict(cx=-0.7499302568795561, cy=-0.015139113925433963, half=5.226737155905588e-05,
              w=960, h=540, secs=8.0)
 
-VERSION = "5.1.0"
+VERSION = "5.1.1"
 
 # ---------------- Palette (LUT 256x3 condivisa CPU/GPU) ----------------
 _FIRE = (
@@ -1278,8 +1284,9 @@ class MandelbrotApp:
                  mi=self.mi, mi_auto=bool(self.mi_auto),
                  precision=_PREC, palette=_PALETTE,
                  backend=("cuda" if _USE_GPU else "cpu"),
-                 bench=dict(self.bench),
-                 view_file=self.view_file)
+                 bench=dict(self.bench))
+        # NB: view_file NON e' persistito (v5.1.1): all'avvio il programma deve
+        # partire senza file corrente, cosi' 'Salva zona' chiede sempre il nome.
         try:
             d = os.path.dirname(CONFIG_PATH)
             if d:
@@ -1303,8 +1310,10 @@ class MandelbrotApp:
         self.mi = int(c.get("mi", self.mi))
         self.mi_auto = bool(c.get("mi_auto", self.mi_auto))
         self._load_bench(c.get("bench"))
-        vf = c.get("view_file")
-        self.view_file = vf if (isinstance(vf, str) and vf) else None
+        # NB: view_file NON viene ripristinato (v5.1.1): all'avvio il programma
+        # parte senza file corrente (eventuali vecchi 'view_file' nella config
+        # esistente sono ignorati); 'Salva zona' chiede sempre il nome finche'
+        # l'utente non carica/salva esplicitamente una zona in questa sessione.
         self.mi_auto_var.set(self.mi_auto)
         st = "disabled" if self.mi_auto else "normal"
         self.mi_minus.config(state=st)

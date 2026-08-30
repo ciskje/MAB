@@ -97,11 +97,15 @@ da questo registro.
 
 ## File
 - **Zona** (JSON della vista, indentato): `{"app", "versione", "cx", "cy", "half", "mi", "mi_auto"}`.
-  "Salva zona" riscrive il **file corrente** (`view_file`), altrimenti chiede il nome
-  (default `mandelbrot_<AAAAmmgg_HHMMSS>.json`); "Carica zona…" ripristina vista + MI
+  "Salva zona" riscrive il **file corrente** (`view_file`) se c'è, altrimenti chiede il
+  nome (default `mandelbrot_<AAAAmmgg_HHMMSS>.json`); "Carica zona…" ripristina vista + MI
   (clamp `half ≥ 1e-12`) e rende il file quello corrente (mostrato nel titolo).
+  **All'avvio il programma parte sempre SENZA file corrente** (v5.1.1: `view_file`
+  non viene più ripristinato dalla config) → "Salva zona" chiede sempre il nome finché
+  l'utente non carica/salva esplicitamente una zona in quella sessione.
 - **Config**: `~\mandelbrot\config.json` con
-  `cx, cy, half, mi, mi_auto, precision, palette, backend, bench, view_file`;
+  `cx, cy, half, mi, mi_auto, precision, palette, backend, bench` (`view_file` non è
+  più persistito, v5.1.1; eventuali vecchi valori in config esistenti sono ignorati);
   salvata all'uscita e **throttled ~1 s** sui cambiamenti; reset riporta i default.
 
 ## Benchmark
