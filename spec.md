@@ -1,7 +1,7 @@
 # Visualizzatore Mandelbrot — spec di ricreazione
 
 Descrizione concisa ma sufficiente perché un altro LLM (o sviluppatore) ricrei il
-programma da zero. Riferimento: `mandel.py` (un solo file), sincronizzata alla **v4.16.0**.
+programma da zero. Riferimento: `mandel.py` (un solo file), sincronizzata alla **v5.0.0**.
 Ogni modifica al sorgente DEVE aggiornare anche questa spec (vedi AGENTS.md).
 
 ## Panoramica
@@ -31,8 +31,10 @@ Ogni modifica al sorgente DEVE aggiornare anche questa spec (vedi AGENTS.md).
   **CPU**: `t = (it/mi)^0.35`.
 - **LUT 256×3** condivisa CPU/GPU: `np.interp` delle stop su 256 punti, ×255, clip, uint8;
   colore = `LUT[round(t·255)]`.
-- **Kernel GPU**: 2 px/thread, `__launch_bounds__(256)`, block 16×16, grid `(⌈w/32⌉, ⌈h/16⌉)`,
-  `--use_fast_math`; 2 varianti (f32/f64) dalla stessa sorgente parametrizzata; NVRTC lazy.
+- **Kernel GPU**: 1 px/thread (v5.0.0: micro-benchmark A/B, 1.8× su z1 / 1.1× su z3
+  vs 2 px/thread; le varianti sono bit-identiche tra loro), `__launch_bounds__(256)`,
+  block 16×16, grid `(⌈w/16⌉, ⌈h/16⌉)`, `--use_fast_math`; 2 varianti (f32/f64) dalla
+  stessa sorgente parametrizzata; NVRTC lazy.
 - **D2H pinned (v4.16.0)**: buffer host pinned cacheato per dimensione
   (`cp.cuda.PinnedMemory` + `cp.cuda.runtime.memcpy(..., memcpyDeviceToHost)`, DMA ~1,7×
   del `.get()` pageable), con fallback `.get()`. La vista numpy: `np.frombuffer` su
@@ -41,8 +43,22 @@ Ogni modifica al sorgente DEVE aggiornare anche questa spec (vedi AGENTS.md).
   (f32 e f64) → init context CUDA, module load e prime allocazioni (device + pinned)
   pagati FUORI dal primo render reale.
 - **CPU (v4.16.0)**: array di lavoro cacheati per (w,h) (offset di griglia +
-  real/imag/c/w4/z/diverged/it riutilizzati, max 3 dimensioni): nessuna allocazione per
-  render; **stesso ordine delle operazioni** del codice precedente → bit-identico.
+  real/imag/c/w4 + work arrays riutilizzati, max 3 dimensioni): nessuna allocazione per
+  render.
+- **CPU (v5.0.0)**: escape loop in **Numba** `@njit(parallel=True)` (dipendenza
+  opzionale): parallelo sulle righe (`prange`), early-exit per pixel, f64; geometry,
+  interior analitico e coloring restano in numpy (il kernel Numba produce solo `it[]`).
+  **Self-test di bit-identità** all'avvio (thread, 4×4 con casi limite vs il loop numpy di
+  riferimento) → se fallisce o Numba è assente, **fallback numpy automatico** (stesso loop,
+  stesso gate). Warmup/compilazione Numba in thread all'avvio (fuori dal primo render).
+  **Cancellazione cooperativa**: ogni nuovo job incrementa il contatore di
+  "generazione" (`_GEN`); il percorso Numba divide le righe in **16 bande** e
+  controlla il contatore **a livello Python tra le bande** (un check in-kernel
+  NON è affidabile — vedi note tecniche), il fallback a ogni iterazione; il
+  worker scarta comunque il frame se la generazione è cambiata.
+  `my_gen=0` disattiva la cancellazione (benchmark/CLI).
+  **Attenzione FMA**: il quadrato complesso va fatto in parti esplicite (`a*a-b*b`,
+  `2*a*b`, ufunc singoli) e NON con `np.square` — vedi note tecniche.
 
 ## Palette
 Registro ordinato `{nome: (t, R, G, B)}` — l'ordine = indice passato al kernel
@@ -69,7 +85,12 @@ da questo registro.
 
 ## Pipeline (asincrona, latest-wins)
 - Thread worker (daemon) + `threading.Condition` + **slot job singolo**: i request in coda
-  collassano sull'ultimo (*latest-wins*); nessun render in corso viene cancellato.
+  collassano sull'ultimo (*latest-wins*).
+- **Cancellazione cooperativa (v5.0.0)**: `_submit` incrementa `_GEN` (list `[int]`,
+  atomoico); il render CPU in corso si ferma se la generazione cambia (Numba: ogni
+  banda di 16 righe, check a livello Python; fallback: iterazione per iterazione)
+  e il worker scarta il frame obsoleto prima di `_show`. GPU: non cancellabile
+  (render <160 ms), solo scarto post-render.
 - `request_render`: **preview ¼** (min 16 px) immediata, poi render full dopo **500 ms**
   (solo se la vista non è cambiata).
 - UI: poll ogni **30 ms** (`tkinter.after`) che mostra l'ultimo frame (ridimensionato al canvas).
@@ -104,5 +125,20 @@ da questo registro.
 - **CuPy 14**: `cp.cuda.MemoryHost` e `Event.elapsed_time` non esistono più → memoria
   host pinned con `cp.cuda.PinnedMemory(size)` (+`.ptr`) e `cp.cuda.runtime.memcpy(dst,
   src, n, kind)`; timing con `perf_counter`+sync.
+- **FMA numpy (scoperta v5.0.0, critica per la bit-identità)**: `np.square` su array
+  complessi è compilato da numpy 2.4 **con FMA** (`re*re - im*im` contratto in
+  `fma(re, re, -(im*im))`, dipende dal build SIMD), mentre Numba senza fastmath NON
+  contrae: 1 ULP di differenza su orbite caotiche → escape time diverso su una
+  piccolissima frazione di pixel di bordo (0.01–0.8% a seconda dello zoom). Regola:
+  in tutto il codice CPU il quadrato complesso va fatto in parti esplicite
+  (`a*a-b*b`, `2*a*b` con ufunc singoli) → percorso Numba e fallback numpy restano
+  bit-identici tra loro. Contro i frame v4.x (np.square) il gate CPU accetta
+  ≤1.5% di pixel diversi (solo bordo caotico); GPU bit-identico.
+- **Modello di memoria Numba (scoperta v5.0.0)**: dentro `prange` la lettura di una
+  memoria scritta da un altro thread **non è affidabile**: Numba/LLVM fa hoisting del
+  load fuori dal loop (semantica single-thread), quindi un bump cross-thread non è
+  visto e il lavoro viene comunque eseguito (verificato sperimentalmente). La
+  cancellazione cooperativa va fatta a livello Python (tra bande/segmenti), non
+  dentro il kernel.
 - Tkinter: `delete`/`insert` su `Entry` disabilitato sono **no-op** → prima `state="normal"`.
 - Note operative (PowerShell su UNC, tool, workflow di versionamento): vedi **AGENTS.md**.

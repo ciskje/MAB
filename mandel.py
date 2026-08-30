@@ -1,15 +1,57 @@
 # ============================================================================
 # Insieme di Mandelbrot - visualizzatore interattivo
-# VERSIONE: 4.16.0
+# VERSIONE: 5.0.0
 # ----------------------------------------------------------------------------
 # REGOLA: ogni modifica incrementa la versione e aggiunge una voce qui sotto
 # (formato: versione - data - descrizione modifiche).
 #
 # STORICO:
+# 5.0.0 - 2026-08-30
+#   - (Fase 2 reingegnerizzazione v5, vedi PIANO-REINGEGNERIZZAZIONE.md)
+#     CPU: escape loop riscritto in Numba (@njit(parallel=True), dipendenza
+#     opzionale): parallelo sulle righe, early-exit per pixel, f64. Attesa
+#     10-50x sul collo di bottiglia CPU (mi~10^4: secondi -> <1 s).
+#   - CPU: self-test di BIT-IDENTICITA' del kernel Numba contro il loop numpy
+#     di riferimento all'avvio (thread, 16x16 con casi limite); se non tiene o
+#     Numba e' assente -> fallback numpy automatico (stesso loop, stesso gate).
+#   - CPU: cancellazione cooperativa: ogni nuovo job incrementa una
+#     "generazione" condivisa; il render CPU in corso (Numba o fallback)
+#     verifica il flag e si ferma se la vista e' cambiata; il worker scarta
+#     il frame obsoleto. my_gen=0 = nessuna cancellazione (benchmark/riga di
+#     comando). Il check Numba e' a livello PYTHON tra 16 bande di righe:
+#     un check in-kernel NON e' affidabile (Numba/LLVM fa hoisting dei
+#     letture di memoria cross-thread dentro prange: il bump non era visto,
+#     verificato sperimentalmente).
+#   - Warmup Numba in thread all'avvio: la compilazione (1-2 s) e' pagata
+#     FUORI dal primo render CPU.
+#   - Nota: GPU non cancellabile (render GPU <160 ms; non vale la
+#     complessita').
+#   - (Fase 3 reingegnerizzazione v5, vedi PIANO-REINGEGNERIZZAZIONE.md)
+#     GPU: launch config ottimizzata con micro-benchmark A/B in-process
+#     (8 varianti px/thread x block, GPU condivisa con llama-server: misure
+#     solo relative, warmup bounded 20 launch, mediana). Vincente: 1 px/thread
+#     block 16x16 (era 2 px/thread): z1 0.17 vs 0.31 ms (1.8x), z3 3.30 vs
+#     3.71 ms (1.1x). Tutte le varianti verificate BIT-IDENTICHE tra loro
+#     (ogni pixel e' calcolato in modo indipendente: la config di launch non
+#     cambia il risultato, solo la ripartizione del lavoro).
+#   - CORRETTEZZA (importante, scoperta durante questa fase): numpy 2.4
+#     compila l'ufunc np.square su complessi con FMA (re*re - im*im contratto
+#     in fma, dipendente dal build) mentre Numba (senza fastmath) NON
+#     contrae: i due bit differivano su orbite caotiche (escape time
+#     diverso per una piccolissima frazione di pixel di bordo: 0.01-0.8%
+#     della immagine a seconda dello zoom). Soluzione: la CPU (numba e
+#     fallback numpy) usa ORA il quadrato in parti esplicite (a*a-b*b,
+#     2*a*b con ufunc singoli, senza FMA) -> i due percorsi CPU sono
+#     bit-identici tra loro e deterministici. Contro i frame v4.15.1 CPU
+#     (calcolati con np.square FMA) restano differenze solo su pixel di
+#     bordo caotico (<=0.8% a z3): il gate CPU e' ora (a) bit-identico ai
+#     riferimenti v5.0.0 e (b) continuita' <=1.5% dei pixel vs v4.15.1.
+#     GPU invariato e bit-identico ai riferimenti v4.15.1.
 # 4.16.0 - 2026-08-30
 #   - (Fase 1 reingegnerizzazione v5, vedi PIANO-REINGEGNERIZZAZIONE.md)
-#     Rendering: D2H su buffer host PINNED (cp.cuda.MemoryHost, cache per
-#     dimensione, DMA ~2x piu' veloce del .get() pageable; fallback .get()).
+#     Rendering: D2H su buffer host PINNED (CuPy 14: cp.cuda.PinnedMemory +
+#     cp.cuda.runtime.memcpy, cache per dimensione, DMA ~1,7x del .get()
+#     pageable; fallback .get()).
 #   - CPU: array di lavoro cacheati per (w,h) (offset di griglia +
 #     real/imag/c/w4/z/diverged/it riutilizzati: nessuna allocazione per
 #     render; max 3 dimensioni cacheate). Bit-identico al codice precedente
@@ -242,7 +284,7 @@ CONFIG_PATH = os.path.join(os.path.expanduser("~"), "mandelbrot", "config.json")
 BENCH = dict(cx=-0.7499302568795561, cy=-0.015139113925433963, half=5.226737155905588e-05,
              w=960, h=540, secs=8.0)
 
-VERSION = "4.16.0"
+VERSION = "5.0.0"
 
 # ---------------- Palette (LUT 256x3 condivisa CPU/GPU) ----------------
 _FIRE = (
@@ -374,9 +416,13 @@ extern "C" __global__ void __launch_bounds__(256) @@KNAME@@(
     @@LUTSELECT@@
     int tx = blockIdx.x * blockDim.x + threadIdx.x;
     int ty = blockIdx.y * blockDim.y + threadIdx.y;
-    int col0 = tx * 2;
+    // v5.0.0 (Fase 3): 1 px/thread (era 2): micro-benchmark A/B in-process
+    // su 8 varianti (px 1/2/4 x block 16x16/32x8/8x32/32x16/8x16/16x8)
+    // -> 1px 16x16 vincente su entrambe le zone (z1 1.8x, z3 1.1x); tutte le
+    // varianti bit-identiche tra loro (ogni pixel e' calcolato in modo
+    // indipendente, la config non cambia il risultato).
+    int col0 = tx;
     process_pixel(col0, ty, w, h, cx, cy, half, mi, lut, out);
-    process_pixel(col0 + 1, ty, w, h, cx, cy, half, mi, lut, out);
 }
 '''
 
@@ -466,7 +512,8 @@ def compute_gpu(cx, cy, half, w, h, mi, buf=None, prec=None):
         buf = _BUF
     out = buf[:need]
     bx, by = 16, 16
-    grid = ((w + 2 * bx - 1) // (2 * bx), (h + by - 1) // by)
+    # v5.0.0 (Fase 3): 1 px/thread -> grid = ceil(w/bx) x ceil(h/by)
+    grid = ((w + bx - 1) // bx, (h + by - 1) // by)
     pal = list(PALETTES).index(_PALETTE)
     p = prec if prec in ("f32", "f64") else _PREC
     use64 = (p == "f64") and (_KERNEL_F64 is not None)
@@ -494,6 +541,111 @@ def compute_gpu(cx, cy, half, w, h, mi, buf=None, prec=None):
 
 # v4.16.0: array di lavoro CPU cacheati per (w,h) (nessuna allocazione per
 # render: offset di griglia + real/imag/c/w4/z/diverged/it riutilizzati).
+# v5.0.0: escape loop Numba (opzionale, con fallback numpy bit-identico).
+# Il kernel fa SOLO il loop di escape (stessa semantica del loop numpy:
+# it = indice 0-based dell'iterazione in cui |z|^2 > 4, altrimenti 0);
+# geometria, prefiltro interior e coloring restano in numpy (invariati).
+# Cancellazione cooperativa (my_gen = generazione del job; 0 = nessuna
+# cancellazione, es. benchmark/CLI): le righe sono divise in 16 bande e il
+# contatore _GEN[0] e' controllato a livello PYTHON tra le bande (affidabile;
+# un check in-kernel NON lo e': Numba/LLVM fa hoisting dei letture di
+# memoria cross-thread dentro prange, verificato sperimentalmente).
+# Se il job diventa obsoleto, le bande rimanenti vengono saltate e il frame
+# e' comunque scartato dal worker (doppia garanzia).
+_NUMBA_OK = False
+_GEN = np.zeros(1, dtype=np.int32)
+try:
+    from numba import njit, prange
+
+    # NB: NO cache=True: il cache di numba e' legato al nome del modulo e
+    # mandel.py e' eseguito/importato con nomi diversi (__main__ vs mandel vs
+    # loader dinamico) -> il load della cache falliva. La compilazione (~1-2 s)
+    # e' pagata dal thread di warmup all'avvio, prima del primo render CPU.
+    @njit(parallel=True)
+    def _mandel_escape(c, diverged, it, mi, row0, row1):
+        # Solo il loop di fuga sulle righe [row0, row1). La cancellazione
+        # cooperativa e' gestita dal chiamante (compute_cpu) a livello
+        # PYTHON, tra bande di righe: un check in-kernel di un contatore
+        # scritto da un altro thread NON e' affidabile con Numba/LLVM
+        # (verificato sperimentalmente: il load di gen_arr[0] viene fatto
+        # una sola volta / hoistato fuori dal loop prange, quindi il bump
+        # cross-thread non e' visto e le righe vengono comunque elaborate).
+        w = c.shape[1]
+        for row in prange(row0, row1):
+            for col in range(w):
+                if diverged[row, col]:
+                    continue
+                vre = c[row, col].real
+                vim = c[row, col].imag
+                z_re = 0.0
+                z_im = 0.0
+                for i in range(mi):
+                    # z = z^2 + c (stesso ordine di operazioni del numpy)
+                    z_re, z_im = z_re * z_re - z_im * z_im, 2.0 * z_re * z_im
+                    z_re += vre
+                    z_im += vim
+                    if z_re * z_re + z_im * z_im > 4.0:
+                        it[row, col] = i
+                        break
+except Exception:
+    njit = None
+    prange = None
+
+def _numba_warmup():
+    """Compila il kernel in background all'avvio e fa un self-test di
+    bit-identita' contro il loop numpy di riferimento; se la bit-identita'
+    non tiene (o la compilazione fallisce) resta il fallback numpy.
+    """
+    global _NUMBA_OK
+    if njit is None:
+        return
+    try:
+        # self-test: 4x4 con casi limite (interiori, fuga rapida/lenta,
+        # pre-diverged, overflow) — il risultato DEVE essere bit-identico
+        # al loop numpy di compute_cpu.
+        c = np.array([
+            -0.5 + 0.5j, 0.7 + 0.1j, -1.7 + 0j, 0.3 + 0.6j,
+            -0.1 - 0.9j, 2.5j, 0.0, 1.0,
+            -0.749 - 0.001j, 0.1 - 0.7j, -1.2 - 0.5j, 0.9 + 0.9j,
+            -0.28 + 0.01j, -2.0j, 0.5 - 1.9j, -0.75 + 0.12j,
+        ], dtype=np.complex128).reshape(4, 4)
+        d = np.zeros((4, 4), dtype=bool)
+        d[0, 0] = True  # pre-diverged (come il prefiltro interior)
+        it_numba = np.zeros((4, 4), dtype=np.int32)
+        _mandel_escape(c, d, it_numba, 64, 0, 4)
+        # riferimento numpy con la STESSA aritmetica del fallback in
+        # compute_cpu (parti esplicite, no FMA) — il risultato DEVE essere
+        # bit-identico al kernel Numba.
+        zr = np.zeros((4, 4))
+        zi = np.zeros((4, 4))
+        cr = c.real
+        ci = c.imag
+        div = d.copy()
+        it_ref = np.zeros((4, 4), dtype=np.int32)
+        with np.errstate(over="ignore", invalid="ignore"):
+            for i in range(64):
+                if not (~div).any():
+                    break
+                zr2 = zr * zr - zi * zi
+                zi2 = 2.0 * zr * zi
+                zr = zr2 + cr
+                zi = zi2 + ci
+                m = ((zr * zr + zi * zi) > 4.0) & ~div
+                if not m.any():
+                    continue
+                div |= m
+                it_ref[m] = i
+        if not np.array_equal(it_numba, it_ref):
+            return  # bit-identita' violata: resta il fallback numpy
+        # warmup: compila il percorso parallelo a dimensioni realistiche
+        c2 = np.zeros((64, 64), dtype=np.complex128)
+        d2 = np.zeros((64, 64), dtype=bool)
+        it2 = np.zeros((64, 64), dtype=np.int32)
+        _mandel_escape(c2, d2, it2, 32, 0, 64)
+        _NUMBA_OK = True
+    except Exception:
+        pass
+
 _CPU_WS = {}
 
 def _cpu_ws(w, h):
@@ -509,7 +661,12 @@ def _cpu_ws(w, h):
             "imag": np.empty((h, w)),
             "c": np.empty((h, w), dtype=np.complex128),
             "w4": np.empty((h, w), dtype=np.complex128),
-            "z": np.empty((h, w), dtype=np.complex128),
+            # v5.0.0: z in parti reali/immaginarie (NO np.square: quel ufunc e'
+            # compilato da numpy con FMA -> bit diversi dal percorso Numba).
+            "zr": np.empty((h, w)),
+            "zi": np.empty((h, w)),
+            "tr": np.empty((h, w)),
+            "ti": np.empty((h, w)),
             "diverged": np.empty((h, w), dtype=bool),
             "it": np.empty((h, w), dtype=np.int32),
         }
@@ -518,7 +675,7 @@ def _cpu_ws(w, h):
         _CPU_WS[key] = ws
     return ws
 
-def compute_cpu(cx, cy, half, w, h, mi):
+def compute_cpu(cx, cy, half, w, h, mi, my_gen=0):
     ws = _cpu_ws(w, h)
     real, imag = ws["real"], ws["imag"]
     # Ordine delle operazioni IDENTICO al codice originale (bit-identita'
@@ -534,8 +691,10 @@ def compute_cpu(cx, cy, half, w, h, mi):
     c = ws["c"]
     np.multiply(imag, 1j, out=c)
     c += real
-    z = ws["z"]
-    z.fill(0)
+    zr = ws["zr"]
+    zi = ws["zi"]
+    zr.fill(0)
+    zi.fill(0)
     diverged = ws["diverged"]
     diverged.fill(False)
     it = ws["it"]
@@ -548,17 +707,50 @@ def compute_cpu(cx, cy, half, w, h, mi):
     w4 += 1.0
     diverged |= (np.abs(w4) < 2.0 * np.sqrt(0.5 * (np.abs(w4) + np.real(w4))))
     diverged |= (np.abs(c + 1.0) <= 0.25)
-    with np.errstate(over="ignore", invalid="ignore"):
-        for i in range(mi):
-            if not (~diverged).any():
-                break
-            np.square(z, out=z)
-            z += c
-            m = ((z.real * z.real + z.imag * z.imag) > 4.0) & ~diverged
-            if not m.any():
-                continue
-            diverged |= m
-            it[m] = i
+    if _NUMBA_OK:
+        # v5.0.0: escape loop parallelo Numba (bit-identico, verificato a
+        # runtime dal self-test di _numba_warmup).
+        # Cancellazione cooperativa a livello PYTHON (affidabile): le righe
+        # sono divise in 16 bande e il contatore di generazione viene
+        # controllato tra una banda e l'altra. In-kernel non e' affidabile:
+        # Numba/LLVM fa hoisting dei letture di memoria cross-thread dentro
+        # prange, quindi un check in-kernel non vedrebbe il bump.
+        BANDS = 16
+        band = (h + BANDS - 1) // BANDS
+        for b0 in range(0, h, band):
+            if my_gen != 0 and _GEN[0] != my_gen:
+                break  # job obsoleto: stop (il worker scarta il frame)
+            _mandel_escape(c, diverged, it, mi, b0, min(b0 + band, h))
+    else:
+        # Fallback numpy (e riferimento del gate di correttezza).
+        # v5.0.0: quadrato complesso in parti esplicite (a*a-b*b, 2*a*b con
+        # ufunc singoli, NO FMA) = bit-identico al kernel Numba. NB: np.square
+        # su complessi e' compilato da numpy con FMA (re*re - im*im contratto
+        # in fma) e darebbe bit diversi (1 ULP su orbite caotiche -> escape
+        # time diverso su una piccolissima frazione di pixel di bordo).
+        cr = c.real
+        ci = c.imag
+        tr = ws["tr"]
+        ti = ws["ti"]
+        with np.errstate(over="ignore", invalid="ignore"):
+            for i in range(mi):
+                if my_gen != 0 and _GEN[0] != my_gen:
+                    break  # vista cambiata: il frame verra' scartato
+                if not (~diverged).any():
+                    break
+                # z = z^2 + c, in parti (stesse operazioni e ordine del Numba)
+                np.multiply(zr, zr, out=tr)   # tr = zr^2
+                np.multiply(zi, zi, out=ti)   # ti = zi^2
+                tr -= ti                      # tr = zr^2 - zi^2
+                np.multiply(zr, zi, out=ti)   # ti = zr*zi (zr,zi ancora vecchi)
+                ti *= 2.0                     # ti = 2*zr*zi
+                np.add(tr, cr, out=zr)        # zr = tr + cr
+                np.add(ti, ci, out=zi)        # zi = ti + ci
+                m = ((zr * zr + zi * zi) > 4.0) & ~diverged
+                if not m.any():
+                    continue
+                diverged |= m
+                it[m] = i
     t = np.power(np.clip(it / mi, 0.0, 1.0), 0.35).ravel()
     idx = (t * 255).astype(np.uint8)
     rgb = _LUT[idx].reshape((h, w, 3)).copy()
@@ -573,10 +765,10 @@ def backend():
         return "CUDA " + _PREC
     return "CPU f64"
 
-def compute(cx, cy, half, w, h, mi, buf=None, prec=None):
+def compute(cx, cy, half, w, h, mi, buf=None, prec=None, my_gen=0):
     if _USE_GPU:
         return compute_gpu(cx, cy, half, w, h, mi, buf=buf, prec=prec)
-    return compute_cpu(cx, cy, half, w, h, mi)
+    return compute_cpu(cx, cy, half, w, h, mi, my_gen=my_gen)
 
 # v4.16.0: warmup GPU in background all'avvio: init context CUDA, module load
 # e prime allocazioni (buffer device + pinned) pagati FUORI dal primo render
@@ -591,6 +783,7 @@ def _gpu_warmup():
 
 if _GPU:
     threading.Thread(target=_gpu_warmup, daemon=True).start()
+threading.Thread(target=_numba_warmup, daemon=True).start()
 
 def bench_engine():
     return "CUDA f32" if _GPU else "CPU f64 (GPU non disponibile)"
@@ -908,6 +1101,7 @@ class MandelbrotApp:
         # pipeline asincrona latest-wins (worker + Condition, niente blocco UI)
         self._cv = threading.Condition()
         self._job = None
+        self._gen = 0
         self._frames = queue.Queue()
         self._last_msg = ""
         self._full_timer = None
@@ -939,8 +1133,13 @@ class MandelbrotApp:
             self._submit(view, w, h)
 
     def _submit(self, view, w, h):
+        # v5.0.0: ogni nuovo job e' una nuova "generazione"; il render CPU in
+        # corso (se obsoleto) se ne accorge a fine riga e si ferma (il frame
+        # verra' scartato dal worker).
+        self._gen += 1
+        _GEN[0] = self._gen
         with self._cv:
-            self._job = (view, w, h)
+            self._job = (view, w, h, self._gen)
             self._cv.notify()
 
     def _worker_loop(self):
@@ -950,13 +1149,15 @@ class MandelbrotApp:
                     self._cv.wait()
                 job = self._job
                 self._job = None
-            view, w, h = job
+            view, w, h, gen = job
             try:
                 t0 = time.perf_counter()
-                img = compute(view[0], view[1], view[2], w, h, view[3])
+                img = compute(view[0], view[1], view[2], w, h, view[3], my_gen=gen)
                 rt = time.perf_counter() - t0
             except Exception:
                 continue
+            if _GEN[0] != gen:
+                continue  # obsoleto (vista cambiata): scarto il frame parziale
             self._frames.put((img, self._last_msg, rt))
 
     def _poll(self):

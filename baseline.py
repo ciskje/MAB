@@ -50,7 +50,8 @@ def gpu_split(m, cp, cx, cy, half, mi, prec):
         m._BUF = cp.empty((need,), dtype=cp.uint8)
     out = m._BUF[:need]
     bx, by = 16, 16
-    grid = ((W + 2 * bx - 1) // (2 * bx), (H + by - 1) // by)
+    # v5.0.0 (Fase 3): 1 px/thread -> grid = ceil(W/bx) x ceil(H/by)
+    grid = ((W + bx - 1) // bx, (H + by - 1) // by)
     args = (out, m._PAL_IDX[0], np.asarray(cx, fdt), np.asarray(cy, fdt),
             np.asarray(half, fdt), np.asarray(W, np.int32),
             np.asarray(H, np.int32), np.asarray(mi, np.int32))

@@ -40,6 +40,28 @@ e si trova in cima al file.
   `cx + half*X/s` NON è bit-identico a `cx + half*(X/s)` (l'ordine di `*` e `/` cambia
   gli arrotondamenti). Per restare bit-identici conservare l'ordine originale e
   verificare con il gate multi-zona (poteva passare in una zona e rompersi in un'altra).
+- **FMA di numpy (critico, scoperto in v5.0.0)**: `np.square` (e gli ufunc aritmetici
+  su complessi) è compilato da numpy 2.4 **con FMA** nel build SIMD (`re*re - im*im`
+  → `fma(re, re, -(im*im))`); Numba senza fastmath NON contrae. 1 ULP su orbite
+  caotiche cambia l'escape time di una piccolissima frazione di pixel di bordo.
+  **Regola**: in codice CPU che debba essere bit-riproducibile (e confrontato con
+  Numba) il quadrato complesso va fatto in parti esplicite (`a*a-b*b`, `2*a*b` con
+  ufunc singoli) — mai `np.square`/`np.multiply` su complessi.
+- **Numba**: `cache=True` NON usato (mandel.py cambia nome di modulo a ogni load →
+  cache inutilizzabile); compilazione pagata dal warmup thread all'avvio.
+  `break`/`continue` nel corpo di `prange` impediscono la parallelizzazione.
+  **Memoria cross-thread NON affidabile dentro `prange`** (verificato
+  sperimentalmente): Numba/LLVM fa hoisting del load fuori dal loop (semantica
+  single-thread), quindi un bump di un contatore scritto da un altro thread NON
+  e' visto (il check in-kernel `ncol=0` non scattava mai). La cancellazione
+  cooperativa va fatta a livello Python: bande di righe + check tra le bande.
+  Nessun `fma` disponibile in numba (verificato).
+- **Gate correttezza (gate.py, v5)**: GPU bit-identico a `baseline/*_gpu_*.npy`
+  (riferimenti v4.15.1); CPU bit-identica a `baseline/*_cpu.npy` (riferimenti v5.0.0,
+  nuova verità) E continuità ≤1,5% dei pixel vs `baseline/*_cpu_v4151.npy` (effetto
+  FMA documentato). Rigenerare i riferimenti CPU con `baseline.py` dopo ogni cambio
+  semantico del percorso CPU; i riferimenti GPU restano validi finché il kernel CUDA
+  non cambia.
 - Ambiente: la GPU è condivisa con il server LLM locale (llama.cpp) che NON va
   fermato (l'agente gira su quello stesso server). I benchmark GPU hanno rumore di
   fondo: usare workload bounded (n launch fissi, non loop a tempo) e confrontare
