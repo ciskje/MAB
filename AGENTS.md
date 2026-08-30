@@ -1,5 +1,21 @@
 # Convenzioni del progetto
 
+## Struttura del progetto
+- `mandel.py` — il programma (visualizzatore interattivo, Tkinter + CuPy + Numba);
+  versione e STORICO nel commento iniziale del file (fonte di verità).
+- `spec.md` — specifica del programma; DEVE restare in sync col sorgente
+  (vedi regola di versionamento sotto).
+- `baseline.py` — tool da riga di comando: rigenera i frame di riferimento
+  `baseline/*.npy` + misure per stadio (scrive `baseline.txt`).
+  Uso: `python baseline.py [path/mandel.py]`.
+- `gate.py` — gate di correttezza permanente (vedi voce 'Gate correttezza').
+  Uso: `python gate.py [path/mandel.py]`; exit 0 = PASS.
+- `baseline/*.npy` — frame di riferimento (3 zone × GPU f32/f64 + CPU v5 +
+  CPU v4.15.1); usati solo dal gate. `baseline.txt` = ultimo report misure.
+- `PIANO-REINGEGNERIZZAZIONE.md` — piano storico della reingegnerizzazione v5
+  (fatto; conservato come documento di decisioni, non da aggiornare a ogni fix).
+- `mandelbrot_*.json` — zone salvate dall'app (dato utente, gitignorato).
+
 ## Versionamento sorgente (OBBLIGATORIO)
 Ogni modifica a `mandel.py` (o ad altri sorgenti Python del
 progetto) DEVE:
@@ -27,7 +43,9 @@ e si trova in cima al file.
 - CuPy RawKernel: NON passare la palette LUT come argomento array device
   (l'output del kernel la sovrascriveva a ogni launch). Le palette sono
   incorporate nel kernel come `__constant__` (vedi v4.0.0).
-- Il tool `write` NON funziona su path UNC; usare `edit` (che funziona).
+- Tool di editing su path UNC: in passato il tool `write` falliva (oggi
+  funziona, testato 2026-08-30); comunque verificare SEMPRE il contenuto del
+  file dopo la scrittura (il successo riportato non basta).
 - NVRTC: niente flag `-O3`/`--opt-level`; la compilazione è lazy alla
   prima chiamata del kernel.
 - Argomenti scalari dei RawKernel: array numpy size-1, non scalari Python.
