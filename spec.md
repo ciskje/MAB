@@ -1,7 +1,7 @@
 # Visualizzatore Mandelbrot interattivo — spec di ricreazione
 
 > Obiettivo: descrizione concisa ma sufficiente perché un altro LLM (o sviluppatore)
-> possa ricreare il programma da zero. Riferimento: `mandel.py` (un solo file), aggiornata alla **v4.11.1** (2026-08-30).
+> possa ricreare il programma da zero. Riferimento: `mandel.py` (un solo file), aggiornata alla **v4.15.1** (2026-08-30).
 > Regola: ogni modifica al sorgente DEVE essere seguita dall'aggiornamento di questa spec (vedi AGENTS.md).
 
 ## Panoramica
@@ -24,7 +24,7 @@ Python 3.12, `tkinter`, `numpy`, CuPy (`RawKernel` + NVRTC), Pillow (`PIL`).
 - **Zona**: menu File "Carica zona...", "Salva zona", "Salva zona con nome..." (file JSON della vista, vedi sezione *Zona*).
 - Barra di stato: `messaggio | backend | palette | render: <ms>`.
 - Titolo finestra: `Insieme di Mandelbrot v<VERSIONE> - <backend>`, più ` - <nome file corrente>` se c'è una zona salvata/caricata (`view_file`).
-- **UI**: font di tutti i widget a 13 pt (`TkDefaultFont`/`TkTextFont`/`TkMenuFont`); layout: controlli in alto (Motore/Palette/Precisione/Iter), riga pulsanti (etichetta iterazioni, `−1000`/`+1000`, `Benchmark`, `Reset`), canvas al centro, status in fondo. Menu: File → Salva immagine…(Ctrl+S), Carica zona…, Salva zona, Salva zona con nome…, Esci.
+- **UI**: font di tutti i widget a 13 pt (`TkDefaultFont`/`TkTextFont`/`TkMenuFont`); layout: controlli in alto (Motore/Palette/Precisione/Iter), riga pulsanti (etichetta + campo numerico iterazioni, `−1000`/`+1000`, `Benchmark`, `Reset`), canvas al centro, status in fondo. Menu: File → Salva immagine…(Ctrl+S), Carica zona…, Salva zona, Salva zona con nome…, Esci.
 
 ## Rendering (algoritmo)
 - Mandelbrot standard: `z = z² + c`, `z₀ = 0`, escape quando `|z|² > 4`.
@@ -59,9 +59,10 @@ Stop: tuple `(t, R, G, B)`.
   - `B = (.28, .85, .95, .98, .45, .20, .10)`
 
 ## Iterazioni (MI)
-- **Auto** (default ON, disattivabile): `mi = 400·(1 + log10(1.5/half))`, clamp `[50, 10000]` — cresce con lo zoom.
-- **Manual**: pulsanti `±1000` (disabilitati in auto); `mi` mai sotto 50.
-- Disattivando l'auto, `mi` viene **congelato sul valore auto corrente** (non sul default 200), così i pulsanti ± partono dal punto giusto.
+- **Auto** (default ON, disattivabile): `mi = 2000·(1 + log10(1.5/half))`, clamp `[50, 50000]` — cresce con lo zoom. Funzione di modulo unica `auto_mi(half)` (costanti `MI_AUTO_BASE=2000`, `MI_AUTO_MIN/MAX=50/50000`), **condivisa col benchmark**.
+- **Manual**: pulsanti `±1000` (disabilitati in auto) **e immissione diretta del valore** nel campo (attivo in manual; in auto è disabilitato ma mostra comunque il valore auto corrente, e l'etichetta diventa `Iterazioni (auto):`); commit su Invio o perdita del focus; `mi` mai sotto 50.
+- **Validazione immissione**: intero tra **50 e 100000**; valore non valido → messaggio nella barra di stato e ripristino del valore precedente nel campo (nessun render).
+- Disattivando l'auto, `mi` viene **congelato sul valore auto corrente** (non sul default 200), così i pulsanti ± e il campo partono dal punto giusto.
 
 ## Backend e precisione
 - **CPU**: numpy, sempre **f64** (`complex128`).
@@ -94,11 +95,12 @@ Stop: tuple `(t, R, G, B)`.
 - Salvataggio all'uscita + **throttled ~1 s** sui cambiamenti. Reset riporta i default e salva.
 
 ## Benchmark
-- Pulsante "Benchmark": dialog di conferma (regione / iterazioni / risoluzione / motore / durata) con OK/Cancel, poi **thread dedicato** per la durata in config (default 8 s):
-  - default: `c = (0.42663924626512445, -0.3414973874054564i)`, `half = 2.298743311298834e-06`, `mi = 3000`, `960×540`, `secs = 8.0`
-  - i parametri sono **persistiti in config.json** (chiave `bench`, overridibili); il metodo benchmark usa sempre `self.bench`, non la costante
+- Pulsante "Benchmark": **dialog di conferma custom** (`Toplevel` modale centrato, non `messagebox`): titolo, parametri in griglia etichetta+valore (font monospace), pulsanti **Avvia/Annulla** (`Return` = Avvia, `Esc`/X = Annulla); poi **thread dedicato** per la durata in config (default 8 s):
+  - default: `c = (-0.7499302568795561, -0.015139113925433963i)`, `half = 5.226737155905588e-05`, `960×540`, `secs = 8.0`; nella zona di default `mi ≈ 10916`
+  - **`mi` NON è più un parametro fisso**: viene SEMPRE calcolato con la stessa formula auto, `mi = auto_mi(bench['half'])` (dialog e report mostrano il valore derivato); così il benchmark resta comparabile anche se la formula auto cambia in futuro
+  - gli altri parametri sono **persistiti in config.json** (chiave `bench`, overridibili); il metodo benchmark usa sempre `self.bench`, non la costante (una vecchia chiave `bench.mi` in config viene ignorata)
   - GPU: **sempre f32** (indipendente da motore/precisione selezionati), buffer proprio (no contesa col render normale); senza GPU: CPU f64
-- Report: n. ripetizioni, rendering/s, ms/render (dialog finale + status).
+- Report: **dialog risultato custom** in cui il **rendering/s è il protagonista** (numeron grande ~42pt verde + etichetta "rendering / secondo"); sotto, statistiche secondarie (n. ripetizioni, ms/render) e griglia dei parametri del test. In caso di errore: "BENCHMARK FALLITO" in rosso + dettaglio. Lo status bar mostra comunque "benchmark completato".
 
 ## Convenzioni
 - **Ogni modifica al sorgente deve essere seguita dall'aggiornamento di questa spec** (spec sempre in sincronia con `mandel.py`).

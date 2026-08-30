@@ -6,6 +6,57 @@
 # (formato: versione - data - descrizione modifiche).
 #
 # STORICO:
+# 4.15.1 - 2026-08-30
+#   - Grafica benchmark: dialog messagebox sostituiti da dialog Toplevel
+#     custom (modali, centrati). Conferma: titolo, riga parametri in griglia
+#     (etichetta + valore monospace), pulsanti Avvia/Annulla (Return/Esc
+#     funzionanti). Risultato: il rendering/s e' il protagonista (42pt verde,
+#     etichetta 'rendering / secondo'), sotto le statistiche secondarie e la
+#     griglia dei parametri; in caso di errore 'BENCHMARK FALLITO' rosso +
+#     dettaglio. Fix: status 'benchmark in corso' non piu' hardcodato a 8 s.
+# 4.15.0 - 2026-08-30
+#   - Formula auto MI aggiornata: mi = 2000 * (1 + log10(1.5/half)),
+#     clamp [50, 50000] (era 400 * ..., clamp [50, 10000]); a vista iniziale
+#     2000, nella zona del becco (half~5.2e-5) ~10916. Funzione di modulo
+#     unica auto_mi(half) condivisa con il benchmark.
+#   - Benchmark: 'mi' rimosso da BENCH/config e non e' piu' un parametro
+#     fisso: viene SEMPRE calcolato con auto_mi(bench['half']), cosi' il
+#     benchmark resta comparabile anche se cambia la formula auto. Dialog e
+#     report mostrano il valore derivato.
+# 4.14.0 - 2026-08-30
+#   - Benchmark: regione di default cambiata in c=(-0.7499302568795561,
+#     -0.015139113925433963i), half=5.226737155905588e-05 (mi=3000 invariato).
+#     Aggiornata anche la 'bench' persistita in config.json (che sovrascrive
+#     il default).
+# 4.13.3 - 2026-08-30
+#   - FIX (il 4.13.2 non bastava): _update_mi_label scriveva delete/insert
+#     con l'Entry GIA' disabilitato dalla chiamata precedente (no-op silenziosi
+#     di Tkinter) -> in auto il campo mostrava il valore del primo update e
+#     poi non si aggiornava piu'. Ora: state=normal -> delete/insert ->
+#     state=disabled (se auto). Verificato con test su widget reali.
+# 4.13.2 - 2026-08-30
+#   - FIX: in auto il campo MI era vuoto: in Tkinter delete/insert su Entry
+#     disabilitato sono no-op silenziosi e lo stato veniva impostato PRIMA di
+#     scrivere il testo. Ora il testo e' aggiornato per primo, poi lo stato.
+#     (Verificato con test automatizzato su widget reali.)
+# 4.13.1 - 2026-08-30
+#   - FIX: con l'auto attivo nel campo MI non si vedeva il valore (il testo
+#     "N (auto)" era piu' lungo del campo e, con l'allineamento a destra,
+#     tagliava i numeri). Il campo ora mostra SEMPRE solo il numero (anche in
+#     auto, disabilitato); l'indicatore auto passa sull'etichetta
+#     ("Iterazioni (auto):").
+# 4.13.0 - 2026-08-30
+#   - Iterazioni: con l'auto disattivato il valore si puo' immettere
+#     direttamente nel campo (prima etichetta sola, modificabile solo con
+#     +/-1000); commit su Invio o perdita del focus; validazione: intero tra
+#     50 e 100000, altrimenti messaggio di errore e ripristino del valore
+#     precedente. Con l'auto attivo il campo e' disabilitato e mostra il
+#     valore auto corrente ("N (auto)").
+# 4.12.0 - 2026-08-30
+#   - Benchmark: regione di default cambiata in c=(-0.7495463271154293,
+#     -0.04276767920924388i), half=4.8677783048763816e-04 (mi=3000 invariato).
+#     Aggiornata anche la 'bench' persistita in config.json (che sovrascrive
+#     il default).
 # 4.11.1 - 2026-08-30
 #   - Refactor leggibilita' (nessun cambio di comportamento, CPU bit-identica
 #     maxdiff=0 su 3 viste): metodi di MandelbrotApp raggruppati per funzione
@@ -152,19 +203,35 @@ from PIL import Image, ImageTk
 INIT_W, INIT_H = 960, 540
 CX0, CY0, HALF0 = -0.5, 0.0, 1.5
 MI0 = 200
+# Iterazioni "auto": mi = MI_AUTO_BASE * (1 + log10(HALF0/half)), clamp [50, 50000]
+# (coefficiente alzato da 400 a 2000 e clamp max da 10000 a 50000: le zone
+# quasi paraboliche, es. vicino al becco della cardioide, fuggono lentamente
+# e con il vecchio coefficiente il coloring non convergeva).
+# La STESSA formula e' usata dal benchmark (vedi v4.15.0).
+MI_AUTO_BASE = 2000
+MI_AUTO_MIN, MI_AUTO_MAX = 50, 50000
+
 MIN_HALF = 1e-12  # clamp minimo per half (evita zoom infinito -> half=0, stato degenere)
 MIN_DIM = 50  # larghezza/altezza canvas minimi per considerare il canvas valido
+
+def auto_mi(half):
+    """Iterazioni 'auto' per una data half: formula unica condivisa da eff_mi
+    e benchmark (vedi costanti MI_AUTO_*)."""
+    z = HALF0 / max(half, 1e-12)
+    return int(max(MI_AUTO_MIN, min(MI_AUTO_MAX, MI_AUTO_BASE * (1.0 + math.log10(z)))))
 
 # --- Percorsi e parametri ---
 # Config salvata/caricata a ogni esecuzione (vista + tutti i settaggi)
 CONFIG_PATH = os.path.join(os.path.expanduser("~"), "mandelbrot", "config.json")
 
-# Benchmark: regione + parametri. Default = regione di zoom profondo (seme
-# fornito dall'utente); i valori sono persistiti in config.json (overridibili).
-BENCH = dict(cx=0.42663924626512445, cy=-0.3414973874054564, half=2.298743311298834e-06,
-             mi=3000, w=960, h=540, secs=8.0)
+# Benchmark: regione + parametri. Default = regione fornita dall'utente;
+# i valori sono persistiti in config.json (overridibili).
+# NB: 'mi' non fa piu' parte di BENCH: e' sempre derivato dalla formula auto
+# (auto_mi(bench['half'])) per mantenere il benchmark comparabile tra versioni.
+BENCH = dict(cx=-0.7499302568795561, cy=-0.015139113925433963, half=5.226737155905588e-05,
+             w=960, h=540, secs=8.0)
 
-VERSION = "4.11.1"
+VERSION = "4.15.1"
 
 # ---------------- Palette (LUT 256x3 condivisa CPU/GPU) ----------------
 _FIRE = (
@@ -514,8 +581,13 @@ class MandelbrotApp:
         self.auto_btn.pack(side="left", padx=2, pady=3)
         self.btns = tk.Frame(self.root)
         self.btns.pack(fill="x")
-        self.mi_label = tk.Label(self.btns, text=f"Iterazioni: {self.mi}")
-        self.mi_label.pack(side="left", padx=8, pady=3)
+        self.mi_caption = tk.Label(self.btns, text="Iterazioni:")
+        self.mi_caption.pack(side="left", padx=(8, 2), pady=3)
+        self.mi_entry = tk.Entry(self.btns, width=7, justify="right")
+        self.mi_entry.pack(side="left", padx=2, pady=3)
+        self.mi_entry.bind("<Return>", self._commit_mi_entry)
+        self.mi_entry.bind("<FocusOut>", self._commit_mi_entry)
+        self._update_mi_label()
         self.mi_minus = tk.Button(self.btns, text="-1000", command=lambda: self.change_mi(-1000))
         self.mi_minus.pack(side="left", padx=2, pady=3)
         self.mi_plus = tk.Button(self.btns, text="+1000", command=lambda: self.change_mi(+1000))
@@ -595,10 +667,15 @@ class MandelbrotApp:
         return True
 
     def _update_mi_label(self):
+        self.mi_caption.config(text="Iterazioni (auto):" if self.mi_auto else "Iterazioni:")
+        # ATTENZIONE: in Tkinter delete/insert su Entry disabilitato sono no-op
+        # silenziosi -> riabilitare PRIMA di scrivere, poi disabilitare di nuovo
+        # (il widget arriva gia' disabilitato dalla chiamata precedente).
+        self.mi_entry.config(state="normal")
+        self.mi_entry.delete(0, "end")
+        self.mi_entry.insert(0, str(self.eff_mi()))
         if self.mi_auto:
-            self.mi_label.config(text=f"Iterazioni: {self.eff_mi()} (auto)")
-        else:
-            self.mi_label.config(text=f"Iterazioni: {self.mi}")
+            self.mi_entry.config(state="disabled")
 
     # ---------------- Vista e interazione (geometria + mouse/tastiera) ----------------
     def canvas_size(self):
@@ -660,8 +737,7 @@ class MandelbrotApp:
     def eff_mi(self):
         if not self.mi_auto:
             return self.mi
-        z = HALF0 / max(self.half, 1e-12)
-        return int(max(50, min(10000, 2 * MI0 * (1.0 + math.log10(z)))))
+        return auto_mi(self.half)
 
     def toggle_auto_mi(self):
         new_auto = self.mi_auto_var.get()
@@ -682,6 +758,24 @@ class MandelbrotApp:
     def change_mi(self, d):
         self.mi = max(50, self.mi + d)
         self._update_mi_label()
+        self.request_render("iterazioni modificate")
+
+    def _commit_mi_entry(self, e=None):
+        if self.mi_auto:
+            return
+        txt = self.mi_entry.get().strip()
+        try:
+            v = int(txt)
+        except ValueError:
+            v = 0
+        if v < 50 or v > 100000:
+            self.status.config(text="MI invalidi: intero tra 50 e 100000")
+            self.mi_entry.delete(0, "end")
+            self.mi_entry.insert(0, str(self.mi))
+            return
+        if v == self.mi:
+            return
+        self.mi = v
         self.request_render("iterazioni modificate")
 
     def set_backend(self, b):
@@ -929,7 +1023,7 @@ class MandelbrotApp:
         self.bench["cx"] = float(b.get("cx", BENCH["cx"]))
         self.bench["cy"] = float(b.get("cy", BENCH["cy"]))
         self.bench["half"] = float(b.get("half", BENCH["half"]))
-        self.bench["mi"] = int(b.get("mi", BENCH["mi"]))
+        # 'mi' non si carica piu': e' derivato da auto_mi(bench['half'])
         self.bench["w"] = int(b.get("w", BENCH["w"]))
         self.bench["h"] = int(b.get("h", BENCH["h"]))
         self.bench["secs"] = float(b.get("secs", BENCH["secs"]))
@@ -949,28 +1043,128 @@ class MandelbrotApp:
         self.root.destroy()
 
     # ---------------- Benchmark ----------------
+    def _bench_rows(self):
+        b = self.bench
+        mi = auto_mi(b["half"])
+        return [
+            ("Regione", f"c = ({b['cx']}, {b['cy']}i)"),
+            ("Met\u00e0 lato", f"{b['half']:.3e}"),
+            ("Iterazioni", f"{mi}\u00a0 (formula auto)"),
+            ("Risoluzione", f"{b['w']} \u00d7 {b['h']} px"),
+            ("Motore", f"{bench_engine()} (fisso)"),
+            ("Durata", f"{b['secs']:.0f} s"),
+        ]
+
+    def _modal(self, win):
+        """Rende 'win' modale e centrato su self.root; blocca fino a chiusura.
+        Ritorna True se la finestra e' stata chiusa normalmente (distrutta),
+        False se annullata (X, Esc o pulsante 'Annulla')."""
+        def cancel(_e=None):
+            win._annullato = True
+            win.destroy()
+        win._annullato = False
+        win.protocol("WM_DELETE_WINDOW", cancel)
+        win.bind("<Escape>", cancel)
+        win.transient(self.root)
+        win.grab_set()
+        win.update_idletasks()
+        w, h = win.winfo_width(), win.winfo_height()
+        x = self.root.winfo_rootx() + (self.root.winfo_width() - w) // 2
+        y = self.root.winfo_rooty() + max((self.root.winfo_height() - h) // 3, 0)
+        win.geometry(f"+{max(x, 0)}+{max(y, 0)}")
+        self.root.wait_window(win)
+        self.root.focus_force()
+        return not win._annullato
+
+    def _bench_ask(self):
+        """Dialog di conferma personalizzato: True se avviare."""
+        win = tk.Toplevel(self.root)
+        win.title("Benchmark Mandelbrot")
+        win.resizable(False, False)
+        body = tk.Frame(win, padx=26, pady=20)
+        body.pack(fill="both", expand=True)
+        tk.Label(body, text="Benchmark standardizzato",
+                 font=("Segoe UI", 14, "bold")).pack(anchor="w")
+        tk.Label(body, text="Parametri del test (regione e durata comparabili tra versioni):",
+                 foreground="#555").pack(anchor="w", pady=(2, 12))
+        rows = tk.Frame(body)
+        rows.pack(fill="x")
+        for i, (k, v) in enumerate(self._bench_rows()):
+            tk.Label(rows, text=k, width=12, anchor="w",
+                     foreground="#444").grid(row=i, column=0, sticky="w", pady=3)
+            tk.Label(rows, text=v, anchor="e",
+                     font=("Consolas", 12)).grid(row=i, column=1, sticky="e",
+                                                  padx=(18, 0), pady=3)
+        btns = tk.Frame(win)
+        btns.pack(fill="x", padx=26, pady=(16, 18))
+
+        def go(_e=None):
+            win._annullato = False
+            win.destroy()
+        annulla = tk.Button(btns, text="Annulla")
+        annulla.pack(side="right")
+        avvia = tk.Button(btns, text="Avvia", command=go)
+        avvia.pack(side="right", padx=(0, 10))
+        win.bind("<Return>", go)
+        avvia.focus_set()
+        return self._modal(win)
+
+    def _bench_result_dialog(self, count, secs, err):
+        """Dialog risultato: rendering/s grande e evidente come vero risultato."""
+        win = tk.Toplevel(self.root)
+        win.title("Benchmark \u2014 risultato")
+        win.resizable(False, False)
+        body = tk.Frame(win, padx=30, pady=22)
+        body.pack(fill="both", expand=True)
+        tk.Label(body, text="Risultato",
+                 font=("Segoe UI", 14, "bold")).pack(anchor="w")
+        if count > 0:
+            tk.Frame(body, bg="#e6f4ea", height=1).pack(fill="x", pady=(10, 0))
+            tk.Label(body, text=f"{count/secs:.2f}",
+                     font=("Segoe UI", 42, "bold"),
+                     foreground="#0a7d33").pack(pady=(16, 0))
+            tk.Label(body, text="rendering / secondo",
+                     font=("Segoe UI", 13, "bold"),
+                     foreground="#0a7d33").pack(pady=(0, 8))
+            tk.Label(body, text=f"{count} rendering in {secs:.1f} s   \u00b7   {secs/count*1000:.0f} ms ciascuno",
+                     foreground="#555").pack(pady=(0, 16))
+        else:
+            tk.Label(body, text="BENCHMARK FALLITO",
+                     font=("Segoe UI", 20, "bold"),
+                     foreground="#b00020").pack(pady=(16, 6))
+            tk.Label(body, text=str(err), foreground="#b00020",
+                     wraplength=420, justify="left").pack(anchor="w", pady=(0, 16))
+        tk.Label(body, text="Parametri del test:",
+                 foreground="#555").pack(anchor="w", pady=(0, 4))
+        rows = tk.Frame(body)
+        rows.pack(fill="x", anchor="w")
+        for i, (k, v) in enumerate(self._bench_rows()):
+            tk.Label(rows, text=k, width=12, anchor="w",
+                     foreground="#444").grid(row=i, column=0, sticky="w", pady=2)
+            tk.Label(rows, text=v, anchor="e",
+                     font=("Consolas", 11)).grid(row=i, column=1, sticky="e",
+                                                  padx=(18, 0), pady=2)
+        def chiudi(_e=None):
+            win._annullato = False
+            win.destroy()
+        tk.Button(win, text="Chiudi", command=chiudi).pack(pady=(18, 20))
+        win.bind("<Return>", chiudi)
+        self._modal(win)
+
     def run_benchmark(self):
         if getattr(self, "_bench_running", False):
             self.status.config(text="benchmark gia' in corso")
             return
-        b = self.bench
-        msg = (
-            "Benchmark standardizzato\n"
-            f"  Regione: c=({b['cx']}, {b['cy']}i), meta={b['half']}\n"
-            f"  Iterazioni: {b['mi']}   |   Risoluzione: {b['w']}x{b['h']}\n"
-            f"  Motore: {bench_engine()} (sempre float32, indipendente dai settaggi)\n"
-            f"  Durata: {b['secs']:.0f} s (loop continuo, poi report)\n\n"
-            "Avviare il benchmark?"
-        )
-        if not tk.messagebox.askokcancel("Benchmark Mandelbrot", msg):
+        if not self._bench_ask():
             self.status.config(text="benchmark annullato")
             return
         self._bench_running = True
-        self.status.config(text="benchmark in corso (8 s)...")
+        self.status.config(text=f"benchmark in corso ({self.bench['secs']:.0f} s)...")
         threading.Thread(target=self._bench_worker, daemon=True).start()
 
     def _bench_worker(self):
         b = self.bench
+        mi = auto_mi(b["half"])
         need = b["w"] * b["h"] * 3
         bench_buf = None
         if _GPU:
@@ -983,8 +1177,8 @@ class MandelbrotApp:
             if _GPU:
                 # benchmark sempre in float32, indipendentemente dai settaggi
                 return compute_gpu(b["cx"], b["cy"], b["half"], b["w"], b["h"],
-                                   b["mi"], buf=bench_buf, prec="f32")
-            return compute_cpu(b["cx"], b["cy"], b["half"], b["w"], b["h"], b["mi"])
+                                   mi, buf=bench_buf, prec="f32")
+            return compute_cpu(b["cx"], b["cy"], b["half"], b["w"], b["h"], mi)
         t_end = time.perf_counter() + b["secs"]
         count = 0
         err = None
@@ -1001,20 +1195,8 @@ class MandelbrotApp:
 
     def _bench_done(self, count, secs, err):
         self._bench_running = False
-        eng = bench_engine()
-        b = self.bench
-        if count > 0:
-            msg = (f"Completati {count} rendering in {secs:.1f} s\n"
-                   f"  {count/secs:.2f} rendering/s   |   {secs/count*1000:.0f} ms ciascuno\n\n"
-                   f"Regione standard: c=({b['cx']}, {b['cy']}i), meta={b['half']}\n"
-                   f"Iterazioni: {b['mi']}   |   Risoluzione: {b['w']}x{b['h']}\n"
-                   f"Motore: {eng}")
-        else:
-            msg = (f"Benchmark fallito: {err}\n\n"
-                   f"Regione standard: c=({b['cx']}, {b['cy']}i), meta={b['half']}, "
-                   f"{b['mi']} iter, {b['w']}x{b['h']}")
         self.status.config(text="benchmark completato")
-        tk.messagebox.showinfo("Benchmark Mandelbrot", msg)
+        self._bench_result_dialog(count, secs, err)
 
 
 def main():

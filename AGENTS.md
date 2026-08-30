@@ -19,6 +19,10 @@ e si trova in cima al file.
 - PowerShell 5.1: NON usare `Start-Process` con `-RedirectStandardOutput`
   verso path UNC (va in timeout). Usare `Start-Process -PassThru`.
 - Tkinter: `tk.Checkbutton` (ortografia americana), mai `tk.CheckButton`.
+- Tkinter Entry: `delete`/`insert` su un Entry con `state="disabled"` sono
+  **no-op silenziosi**. Per aggiornarne il testo: prima `state="normal"`,
+  poi `delete`/`insert`, poi (se serve) `state="disabled"`. Attenzione che il
+  widget arriva già disabilitato dalla chiamata precedente (vedi v4.13.3).
 - CuPy: `np.asarray(array_cupy)` NON è permesso (TypeError); usare `.get()`.
 - CuPy RawKernel: NON passare la palette LUT come argomento array device
   (l'output del kernel la sovrascriveva a ogni launch). Le palette sono
