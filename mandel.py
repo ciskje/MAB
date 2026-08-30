@@ -1,11 +1,17 @@
 # ============================================================================
 # Insieme di Mandelbrot - visualizzatore interattivo
-# VERSIONE: 4.11.0
+# VERSIONE: 4.11.1
 # ----------------------------------------------------------------------------
 # REGOLA: ogni modifica incrementa la versione e aggiunge una voce qui sotto
 # (formato: versione - data - descrizione modifiche).
 #
 # STORICO:
+# 4.11.1 - 2026-08-30
+#   - Refactor leggibilita' (nessun cambio di comportamento, CPU bit-identica
+#     maxdiff=0 su 3 viste): metodi di MandelbrotApp raggruppati per funzione
+#     (Costruzione UI / Helper UI / Vista e interazione / Controlli / Pipeline /
+#     File / Benchmark) con intestazioni di gruppo; intestazione "Dispatch
+#     backend" e gruppi di costanti a livello modulo.
 # 4.11.0 - 2026-08-29
 #   - Carica zona: nuova voce menu File "Carica zona..." che legge un file JSON
 #     (stesso formato del salvataggio) e ripristina vista + iterazioni; il file
@@ -142,12 +148,14 @@ import time
 import numpy as np
 from PIL import Image, ImageTk
 
+# --- Costanti di vista e rendering ---
 INIT_W, INIT_H = 960, 540
 CX0, CY0, HALF0 = -0.5, 0.0, 1.5
 MI0 = 200
 MIN_HALF = 1e-12  # clamp minimo per half (evita zoom infinito -> half=0, stato degenere)
 MIN_DIM = 50  # larghezza/altezza canvas minimi per considerare il canvas valido
 
+# --- Percorsi e parametri ---
 # Config salvata/caricata a ogni esecuzione (vista + tutti i settaggi)
 CONFIG_PATH = os.path.join(os.path.expanduser("~"), "mandelbrot", "config.json")
 
@@ -156,7 +164,7 @@ CONFIG_PATH = os.path.join(os.path.expanduser("~"), "mandelbrot", "config.json")
 BENCH = dict(cx=0.42663924626512445, cy=-0.3414973874054564, half=2.298743311298834e-06,
              mi=3000, w=960, h=540, secs=8.0)
 
-VERSION = "4.11.0"
+VERSION = "4.11.1"
 
 # ---------------- Palette (LUT 256x3 condivisa CPU/GPU) ----------------
 _FIRE = (
@@ -410,6 +418,7 @@ def compute_cpu(cx, cy, half, w, h, mi):
     rgb[it == 0] = 0
     return Image.fromarray(rgb)
 
+# ---------------- Dispatch backend ----------------
 _USE_GPU = _GPU
 
 def backend():
@@ -426,6 +435,7 @@ def bench_engine():
     return "CUDA f32" if _GPU else "CPU f64 (GPU non disponibile)"
 
 class MandelbrotApp:
+    # ---------------- Costruzione UI ----------------
     def __init__(self, root):
         self.root = root
         self._setup_fonts()
@@ -550,23 +560,7 @@ class MandelbrotApp:
         self.canvas.bind("<Key-plus>", lambda e: self.zoom_center(2.0))
         self.canvas.bind("<Key-minus>", lambda e: self.zoom_center(0.5))
 
-    def _start_pipeline(self):
-        # pipeline asincrona latest-wins (worker + Condition, niente blocco UI)
-        self._cv = threading.Condition()
-        self._job = None
-        self._frames = queue.Queue()
-        self._last_msg = ""
-        self._full_timer = None
-        self._worker = threading.Thread(target=self._worker_loop, daemon=True)
-        self._worker.start()
-        self._cfg_dirty = False
-        self._bench_running = False
-        self._bench_result = None
-        self._bench_finished = False
-        self.root.after(30, self._poll)
-        self.root.after(1000, self._flush_config)
-
-    # ---------------- helper UI (titolo + selezione radio anti-duplicazione) ----------------
+    # ---------------- Helper UI ----------------
     def _refresh_title(self):
         t = f"Insieme di Mandelbrot v{VERSION} - {backend()}"
         if self.view_file:
@@ -600,6 +594,13 @@ class MandelbrotApp:
         (self.f32_btn if p == "f32" else self.f64_btn).select()
         return True
 
+    def _update_mi_label(self):
+        if self.mi_auto:
+            self.mi_label.config(text=f"Iterazioni: {self.eff_mi()} (auto)")
+        else:
+            self.mi_label.config(text=f"Iterazioni: {self.mi}")
+
+    # ---------------- Vista e interazione (geometria + mouse/tastiera) ----------------
     def canvas_size(self):
         w = self.canvas.winfo_width()
         h = self.canvas.winfo_height()
@@ -611,6 +612,125 @@ class MandelbrotApp:
         w, h = self.canvas_size()
         return (self.cx + (px - w / 2) / (w / 2) * self.half,
                 self.cy + (py - h / 2) / (h / 2) * self.half * (h / w))
+
+    def zoom_at(self, ux, uy, f):
+        self.cx += (ux - self.cx) * (1 - 1 / f)
+        self.cy += (uy - self.cy) * (1 - 1 / f)
+        self.half = max(self.half / f, MIN_HALF)
+        self.request_render("zoom")
+
+    def zoom_center(self, f):
+        self.zoom_at(self.cx, self.cy, f)
+
+    def on_press(self, e):
+        self.press_pos = (e.x, e.y)
+        self.dragged = False
+
+    def on_drag(self, e):
+        if self.press_pos is None:
+            return
+        x0, y0 = self.press_pos
+        if abs(e.x - x0) < 4 and abs(e.y - y0) < 4:
+            return
+        w, h = self.canvas_size()
+        self.cx -= (e.x - x0) / (w / 2) * self.half
+        self.cy -= (e.y - y0) / (h / 2) * self.half * (h / w)
+        self.press_pos = (e.x, e.y)
+        self.dragged = True
+        self.request_render("pan")
+
+    def on_release(self, e):
+        if self.press_pos is not None and not self.dragged:
+            self.zoom_at(*self.p2c(e.x, e.y), 2.0)
+        self.press_pos = None
+
+    def on_wheel(self, e):
+        f = 1.25 if e.delta > 0 else 0.8
+        self.zoom_at(*self.p2c(e.x, e.y), f)
+
+    def on_configure(self, e):
+        if (e.width, e.height) == self._size:
+            return
+        self._size = (e.width, e.height)
+        if e.width < MIN_DIM or e.height < MIN_DIM:
+            return
+        self.request_render("ridimensionata")
+
+    # ---------------- Controlli (MI, motore, palette, precisione, reset) ----------------
+    def eff_mi(self):
+        if not self.mi_auto:
+            return self.mi
+        z = HALF0 / max(self.half, 1e-12)
+        return int(max(50, min(10000, 2 * MI0 * (1.0 + math.log10(z)))))
+
+    def toggle_auto_mi(self):
+        new_auto = self.mi_auto_var.get()
+        if new_auto:
+            self.mi_auto = True
+        else:
+            # Disattivando l'auto: congela self.mi sul valore auto corrente
+            # (eff_mi calcolato con mi_auto ancora True), invece di mostrare
+            # il valore fisso iniziale (stale).
+            self.mi = self.eff_mi()
+            self.mi_auto = False
+        st = "disabled" if self.mi_auto else "normal"
+        self.mi_minus.config(state=st)
+        self.mi_plus.config(state=st)
+        self._update_mi_label()
+        self.request_render("MI: auto" if self.mi_auto else "MI: fissi")
+
+    def change_mi(self, d):
+        self.mi = max(50, self.mi + d)
+        self._update_mi_label()
+        self.request_render("iterazioni modificate")
+
+    def set_backend(self, b):
+        if not self._select_backend(b):
+            return
+        self._refresh_title()
+        self.request_render("motore: " + b.upper())
+
+    def choose_palette(self, name):
+        self._select_palette(name)
+        self.request_render("palette: " + _PALETTE)
+
+    def set_precision(self, p):
+        if not self._select_precision(p):
+            return
+        self._refresh_title()
+        self.request_render("precisione: " + p)
+
+    def reset(self):
+        self.cx, self.cy, self.half = CX0, CY0, HALF0
+        self.mi = MI0
+        self.mi_auto = True
+        self.mi_auto_var.set(True)
+        self.mi_minus.config(state="disabled")
+        self.mi_plus.config(state="disabled")
+        self._select_palette("fuoco")
+        self._select_backend("cuda" if _GPU else "cpu")
+        self._select_precision("f32")
+        self._refresh_title()
+        self._cfg_dirty = True
+        self._update_mi_label()
+        self.request_render("reset totale")
+
+    # ---------------- Pipeline rendering (asincrona latest-wins) ----------------
+    def _start_pipeline(self):
+        # pipeline asincrona latest-wins (worker + Condition, niente blocco UI)
+        self._cv = threading.Condition()
+        self._job = None
+        self._frames = queue.Queue()
+        self._last_msg = ""
+        self._full_timer = None
+        self._worker = threading.Thread(target=self._worker_loop, daemon=True)
+        self._worker.start()
+        self._cfg_dirty = False
+        self._bench_running = False
+        self._bench_result = None
+        self._bench_finished = False
+        self.root.after(30, self._poll)
+        self.root.after(1000, self._flush_config)
 
     def request_render(self, msg):
         self._last_msg = msg
@@ -676,63 +796,7 @@ class MandelbrotApp:
         self.canvas.create_image(w // 2, h // 2, image=self.photo)
         self.status.config(text=f"{msg} | {backend()} | palette: {_PALETTE} | render: {rt*1000:.0f} ms")
 
-    def on_configure(self, e):
-        if (e.width, e.height) == self._size:
-            return
-        self._size = (e.width, e.height)
-        if e.width < MIN_DIM or e.height < MIN_DIM:
-            return
-        self.request_render("ridimensionata")
-
-    def eff_mi(self):
-        if not self.mi_auto:
-            return self.mi
-        z = HALF0 / max(self.half, 1e-12)
-        return int(max(50, min(10000, 2 * MI0 * (1.0 + math.log10(z)))))
-
-    def _update_mi_label(self):
-        if self.mi_auto:
-            self.mi_label.config(text=f"Iterazioni: {self.eff_mi()} (auto)")
-        else:
-            self.mi_label.config(text=f"Iterazioni: {self.mi}")
-
-    def toggle_auto_mi(self):
-        new_auto = self.mi_auto_var.get()
-        if new_auto:
-            self.mi_auto = True
-        else:
-            # Disattivando l'auto: congela self.mi sul valore auto corrente
-            # (eff_mi calcolato con mi_auto ancora True), invece di mostrare
-            # il valore fisso iniziale (stale).
-            self.mi = self.eff_mi()
-            self.mi_auto = False
-        st = "disabled" if self.mi_auto else "normal"
-        self.mi_minus.config(state=st)
-        self.mi_plus.config(state=st)
-        self._update_mi_label()
-        self.request_render("MI: auto" if self.mi_auto else "MI: fissi")
-
-    def change_mi(self, d):
-        self.mi = max(50, self.mi + d)
-        self._update_mi_label()
-        self.request_render("iterazioni modificate")
-
-    def set_backend(self, b):
-        if not self._select_backend(b):
-            return
-        self._refresh_title()
-        self.request_render("motore: " + b.upper())
-
-    def choose_palette(self, name):
-        self._select_palette(name)
-        self.request_render("palette: " + _PALETTE)
-
-    def set_precision(self, p):
-        if not self._select_precision(p):
-            return
-        self._refresh_title()
-        self.request_render("precisione: " + p)
-
+    # ---------------- File: PNG, zona (JSON), config ----------------
     def save_png(self):
         if getattr(self, "pil", None) is None:
             self.status.config(text="niente immagine da salvare")
@@ -749,7 +813,21 @@ class MandelbrotApp:
         except Exception as ex:
             self.status.config(text="errore salvataggio: " + str(ex))
 
-    # ---------------- salvataggio zona attuale (file JSON leggibile) ----------------
+    def save_zone(self):
+        if self.view_file:
+            self._save_zone_to(self.view_file)
+        else:
+            self.save_zone_as()
+
+    def save_zone_as(self):
+        default = "mandelbrot_" + time.strftime("%Y%m%d_%H%M%S") + ".json"
+        path = tk.filedialog.asksaveasfilename(
+            parent=self.root, defaultextension=".json", initialfile=default,
+            filetypes=[("File JSON", "*.json"), ("Tutti i file", "*.*")])
+        if not path:
+            return
+        self._save_zone_to(path)
+
     def _save_zone_to(self, path):
         c = {
             "app": "mandelbrot",
@@ -770,22 +848,14 @@ class MandelbrotApp:
         except Exception as ex:
             self.status.config(text="errore salvataggio zona: " + str(ex))
 
-    def save_zone(self):
-        if self.view_file:
-            self._save_zone_to(self.view_file)
-        else:
-            self.save_zone_as()
-
-    def save_zone_as(self):
-        default = "mandelbrot_" + time.strftime("%Y%m%d_%H%M%S") + ".json"
-        path = tk.filedialog.asksaveasfilename(
-            parent=self.root, defaultextension=".json", initialfile=default,
+    def load_zone_as(self):
+        path = tk.filedialog.askopenfilename(
+            parent=self.root, title="Carica zona",
             filetypes=[("File JSON", "*.json"), ("Tutti i file", "*.*")])
         if not path:
             return
-        self._save_zone_to(path)
+        self._load_zone_from(path)
 
-    # ---------------- caricamento zona da file JSON ----------------
     def _load_zone_from(self, path):
         try:
             with open(path, "r", encoding="utf-8") as f:
@@ -806,15 +876,6 @@ class MandelbrotApp:
         self._refresh_title()
         self.request_render("zona caricata: " + os.path.basename(path))
 
-    def load_zone_as(self):
-        path = tk.filedialog.askopenfilename(
-            parent=self.root, title="Carica zona",
-            filetypes=[("File JSON", "*.json"), ("Tutti i file", "*.*")])
-        if not path:
-            return
-        self._load_zone_from(path)
-
-    # ---------------- config.json (salva/carica tutti i settaggi) ----------------
     def save_config(self):
         c = dict(cx=self.cx, cy=self.cy, half=self.half,
                  mi=self.mi, mi_auto=bool(self.mi_auto),
@@ -887,7 +948,7 @@ class MandelbrotApp:
             pass
         self.root.destroy()
 
-    # ---------------- benchmark standardizzato ----------------
+    # ---------------- Benchmark ----------------
     def run_benchmark(self):
         if getattr(self, "_bench_running", False):
             self.status.config(text="benchmark gia' in corso")
@@ -955,55 +1016,6 @@ class MandelbrotApp:
         self.status.config(text="benchmark completato")
         tk.messagebox.showinfo("Benchmark Mandelbrot", msg)
 
-    def on_press(self, e):
-        self.press_pos = (e.x, e.y)
-        self.dragged = False
-
-    def on_drag(self, e):
-        if self.press_pos is None:
-            return
-        x0, y0 = self.press_pos
-        if abs(e.x - x0) < 4 and abs(e.y - y0) < 4:
-            return
-        w, h = self.canvas_size()
-        self.cx -= (e.x - x0) / (w / 2) * self.half
-        self.cy -= (e.y - y0) / (h / 2) * self.half * (h / w)
-        self.press_pos = (e.x, e.y)
-        self.dragged = True
-        self.request_render("pan")
-
-    def on_release(self, e):
-        if self.press_pos is not None and not self.dragged:
-            self.zoom_at(*self.p2c(e.x, e.y), 2.0)
-        self.press_pos = None
-
-    def on_wheel(self, e):
-        f = 1.25 if e.delta > 0 else 0.8
-        self.zoom_at(*self.p2c(e.x, e.y), f)
-
-    def zoom_at(self, ux, uy, f):
-        self.cx += (ux - self.cx) * (1 - 1 / f)
-        self.cy += (uy - self.cy) * (1 - 1 / f)
-        self.half = max(self.half / f, MIN_HALF)
-        self.request_render("zoom")
-
-    def zoom_center(self, f):
-        self.zoom_at(self.cx, self.cy, f)
-
-    def reset(self):
-        self.cx, self.cy, self.half = CX0, CY0, HALF0
-        self.mi = MI0
-        self.mi_auto = True
-        self.mi_auto_var.set(True)
-        self.mi_minus.config(state="disabled")
-        self.mi_plus.config(state="disabled")
-        self._select_palette("fuoco")
-        self._select_backend("cuda" if _GPU else "cpu")
-        self._select_precision("f32")
-        self._refresh_title()
-        self._cfg_dirty = True
-        self._update_mi_label()
-        self.request_render("reset totale")
 
 def main():
     root = tk.Tk()

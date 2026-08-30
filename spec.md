@@ -1,7 +1,7 @@
 # Visualizzatore Mandelbrot interattivo — spec di ricreazione
 
 > Obiettivo: descrizione concisa ma sufficiente perché un altro LLM (o sviluppatore)
-> possa ricreare il programma da zero. Riferimento: `mandel.py` (un solo file), aggiornata alla **v4.11.0** (2026-08-30).
+> possa ricreare il programma da zero. Riferimento: `mandel.py` (un solo file), aggiornata alla **v4.11.1** (2026-08-30).
 > Regola: ogni modifica al sorgente DEVE essere seguita dall'aggiornamento di questa spec (vedi AGENTS.md).
 
 ## Panoramica
@@ -82,6 +82,7 @@ Stop: tuple `(t, R, G, B)`.
 - `request_render`: invia subito una **preview 1/4** (min 16 px), poi il **render full dopo 500 ms** (solo se la vista non è cambiata).
 - Thread principale: ogni **30 ms** (`tkinter.after`) spolia una coda e mostra l'ultimo frame (ridimensionato al canvas).
 - **UI sempre responsive** (render su thread separato); **nessuna cancellazione** del render in corso.
+- Metodi della classe raggruppati per funzione (in quest'ordine): Costruzione UI, Helper UI, Vista e interazione, Controlli, Pipeline rendering, File (PNG/zona/config), Benchmark.
 
 ## Zona (file JSON della vista)
 - "Salva zona": riscrive l'ultimo file usato (`view_file`), altrimenti chiede il nome; "Salva zona con nome..." chiede sempre. Nome default `mandelbrot_<AAAAmmgg_HHMMSS>.json`.
