@@ -241,6 +241,14 @@ GPU f64 ≈ 32× più lenta di f32 (nota spec confermata); sulla GPU il kernel d
 | Cancellazione a metà → frame parziali | solo frame completi entrano in coda; le strisce progressivo sono atomiche |
 | Regressione visiva (coloring) | gate di correttezza su 3 zone a ogni fase, reference salvati in Fase 0 |
 
+## Post-v5 — modifiche successive
+- **v5.1.0 (2026-08-30)**: il benchmark ora esegue nella **modalità corrente**
+  dell'app (motore CPU/CUDA + precisione f32/f64 selezionati in toolbar), invece
+  che sempre in CUDA f32 (design v4.x). `bench_engine()` rimossa (display via
+  `backend()`); il render del benchmark passa per `compute()` (dispatch
+  `_USE_GPU` + `_PREC`, buffer proprio su CUDA, `my_gen=0`). Verificato:
+  CPU/CUDA-f32/CUDA-f64 tutti bit-identici ai riferimenti baseline.
+
 ## Riepilogo risultati v5 (misurati)
 | Parte | v4.15.1 | v5.0.0 | Guadagno |
 |---|---|---|---|

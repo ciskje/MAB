@@ -1,11 +1,19 @@
 # ============================================================================
 # Insieme di Mandelbrot - visualizzatore interattivo
-# VERSIONE: 5.0.0
+# VERSIONE: 5.1.0
 # ----------------------------------------------------------------------------
 # REGOLA: ogni modifica incrementa la versione e aggiunge una voce qui sotto
 # (formato: versione - data - descrizione modifiche).
 #
 # STORICO:
+# 5.1.0 - 2026-08-30
+#   - Benchmark: ora eseguito nella MODALITA' CORRENTE dell'app (motore
+#     CPU/CUDA + precisione f32/f64 selezionati), invece che sempre in CUDA f32
+#     (design v4.x 'sempre f32, indipendente dai settaggi'). Il dialog di
+#     conferma mostra la modalita' corrente ('Motore: ... (corrente)').
+#     Nota: per confrontare versioni va usato nella stessa modalita'.
+#   - Rimossa la funzione bench_engine() (sostituita da backend() per il
+#     display della modalita' corrente).
 # 5.0.0 - 2026-08-30
 #   - (Fase 2 reingegnerizzazione v5, vedi PIANO-REINGEGNERIZZAZIONE.md)
 #     CPU: escape loop riscritto in Numba (@njit(parallel=True), dipendenza
@@ -284,7 +292,7 @@ CONFIG_PATH = os.path.join(os.path.expanduser("~"), "mandelbrot", "config.json")
 BENCH = dict(cx=-0.7499302568795561, cy=-0.015139113925433963, half=5.226737155905588e-05,
              w=960, h=540, secs=8.0)
 
-VERSION = "5.0.0"
+VERSION = "5.1.0"
 
 # ---------------- Palette (LUT 256x3 condivisa CPU/GPU) ----------------
 _FIRE = (
@@ -785,8 +793,8 @@ if _GPU:
     threading.Thread(target=_gpu_warmup, daemon=True).start()
 threading.Thread(target=_numba_warmup, daemon=True).start()
 
-def bench_engine():
-    return "CUDA f32" if _GPU else "CPU f64 (GPU non disponibile)"
+# v5.1.0: il benchmark segue la modalita' corrente (motore+precisione
+# selezionati nell'app); per mostrarla nel dialog si usa backend().
 
 class MandelbrotApp:
     # ---------------- Costruzione UI ----------------
@@ -1346,7 +1354,7 @@ class MandelbrotApp:
             ("Met\u00e0 lato", f"{b['half']:.3e}"),
             ("Iterazioni", f"{mi}\u00a0 (formula auto)"),
             ("Risoluzione", f"{b['w']} \u00d7 {b['h']} px"),
-            ("Motore", f"{bench_engine()} (fisso)"),
+            ("Motore", f"{backend()} (corrente)"),
             ("Durata", f"{b['secs']:.0f} s"),
         ]
 
@@ -1462,18 +1470,18 @@ class MandelbrotApp:
         mi = auto_mi(b["half"])
         need = b["w"] * b["h"] * 3
         bench_buf = None
-        if _GPU:
+        if _USE_GPU:
             try:
                 import cupy as cp
                 bench_buf = cp.empty((need,), dtype=cp.uint8)
             except Exception:
                 bench_buf = None
         def render():
-            if _GPU:
-                # benchmark sempre in float32, indipendentemente dai settaggi
-                return compute_gpu(b["cx"], b["cy"], b["half"], b["w"], b["h"],
-                                   mi, buf=bench_buf, prec="f32")
-            return compute_cpu(b["cx"], b["cy"], b["half"], b["w"], b["h"], mi)
+            # v5.1.0: modalita' CORRENTE (motore+precisione selezionati), non
+            # piu' CUDA f32 fisso. compute() dispatcha su _USE_GPU e usa
+            # _PREC (GPU) / f64 (CPU); my_gen=0 -> nessuna cancellazione.
+            return compute(b["cx"], b["cy"], b["half"], b["w"], b["h"], mi,
+                           buf=bench_buf)
         t_end = time.perf_counter() + b["secs"]
         count = 0
         err = None

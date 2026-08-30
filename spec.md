@@ -112,7 +112,10 @@ da questo registro.
 - **`mi` non è un parametro**: sempre `auto_mi(bench['half'])` (~10 915 a default) →
   benchmark comparabile anche se la formula auto cambia.
 - Parametri in `config.json` (chiave `bench`, overridibile; una vecchia `bench.mi` è ignorata).
-- GPU: **sempre f32**, buffer proprio (no contesa col render normale); senza GPU: CPU f64.
+- Esegue nella **modalità corrente** dell'app (v5.1.0, prima era sempre CUDA f32):
+  motore CPU/CUDA + precisione f32/f64 come selezionati in toolbar; su CUDA usa un
+  buffer proprio (no contesa col render normale). Per confrontare versioni,
+  usarlo nella stessa modalità.
 - Report: dialog con **rendering/s in grande** (il vero risultato, ~42pt verde), statistiche
   (n. rendering, ms/render) e griglia dei parametri; errore → "BENCHMARK FALLITO" + dettaglio.
 
