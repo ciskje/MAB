@@ -1,7 +1,7 @@
 # Visualizzatore Mandelbrot — spec di ricreazione
 
 Descrizione concisa ma sufficiente perché un altro LLM (o sviluppatore) ricrei il
-programma da zero. Riferimento: `mandel.py` (un solo file), sincronizzata alla **v4.15.1**.
+programma da zero. Riferimento: `mandel.py` (un solo file), sincronizzata alla **v4.16.0**.
 Ogni modifica al sorgente DEVE aggiornare anche questa spec (vedi AGENTS.md).
 
 ## Panoramica
@@ -33,6 +33,16 @@ Ogni modifica al sorgente DEVE aggiornare anche questa spec (vedi AGENTS.md).
   colore = `LUT[round(t·255)]`.
 - **Kernel GPU**: 2 px/thread, `__launch_bounds__(256)`, block 16×16, grid `(⌈w/32⌉, ⌈h/16⌉)`,
   `--use_fast_math`; 2 varianti (f32/f64) dalla stessa sorgente parametrizzata; NVRTC lazy.
+- **D2H pinned (v4.16.0)**: buffer host pinned cacheato per dimensione
+  (`cp.cuda.PinnedMemory` + `cp.cuda.runtime.memcpy(..., memcpyDeviceToHost)`, DMA ~1,7×
+  del `.get()` pageable), con fallback `.get()`. La vista numpy: `np.frombuffer` su
+  `ctypes` array all'indirizzo `pm.ptr`.
+- **Warmup GPU all'avvio (v4.16.0)**: thread daemon che all'import fa un render 64×64
+  (f32 e f64) → init context CUDA, module load e prime allocazioni (device + pinned)
+  pagati FUORI dal primo render reale.
+- **CPU (v4.16.0)**: array di lavoro cacheati per (w,h) (offset di griglia +
+  real/imag/c/w4/z/diverged/it riutilizzati, max 3 dimensioni): nessuna allocazione per
+  render; **stesso ordine delle operazioni** del codice precedente → bit-identico.
 
 ## Palette
 Registro ordinato `{nome: (t, R, G, B)}` — l'ordine = indice passato al kernel
@@ -91,5 +101,8 @@ da questo registro.
 - Argomenti scalari CuPy = **array numpy size-1**; indice palette preallocato (`_PAL_IDX`).
 - `np.asarray(array_cupy)` **non** è permesso → `.get()`.
 - NVRTC: niente `-O3`/`--opt-level` (la compilazione è lazy alla prima chiamata).
+- **CuPy 14**: `cp.cuda.MemoryHost` e `Event.elapsed_time` non esistono più → memoria
+  host pinned con `cp.cuda.PinnedMemory(size)` (+`.ptr`) e `cp.cuda.runtime.memcpy(dst,
+  src, n, kind)`; timing con `perf_counter`+sync.
 - Tkinter: `delete`/`insert` su `Entry` disabilitato sono **no-op** → prima `state="normal"`.
 - Note operative (PowerShell su UNC, tool, workflow di versionamento): vedi **AGENTS.md**.

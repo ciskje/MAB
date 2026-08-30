@@ -1,11 +1,21 @@
 # ============================================================================
 # Insieme di Mandelbrot - visualizzatore interattivo
-# VERSIONE: 4.11.1
+# VERSIONE: 4.16.0
 # ----------------------------------------------------------------------------
 # REGOLA: ogni modifica incrementa la versione e aggiunge una voce qui sotto
 # (formato: versione - data - descrizione modifiche).
 #
 # STORICO:
+# 4.16.0 - 2026-08-30
+#   - (Fase 1 reingegnerizzazione v5, vedi PIANO-REINGEGNERIZZAZIONE.md)
+#     Rendering: D2H su buffer host PINNED (cp.cuda.MemoryHost, cache per
+#     dimensione, DMA ~2x piu' veloce del .get() pageable; fallback .get()).
+#   - CPU: array di lavoro cacheati per (w,h) (offset di griglia +
+#     real/imag/c/w4/z/diverged/it riutilizzati: nessuna allocazione per
+#     render; max 3 dimensioni cacheate). Bit-identico al codice precedente
+#     (stesso ordine delle operazioni, verificato con gate).
+#   - Warmup GPU in thread all'avvio (64x64, f32+f64): init context CUDA,
+#     module load e prime allocazioni pagati FUORI dal primo render reale.
 # 4.15.1 - 2026-08-30
 #   - Grafica benchmark: dialog messagebox sostituiti da dialog Toplevel
 #     custom (modali, centrati). Conferma: titolo, riga parametri in griglia
@@ -196,6 +206,7 @@ import math
 import os
 import json
 import time
+import ctypes
 import numpy as np
 from PIL import Image, ImageTk
 
@@ -231,7 +242,7 @@ CONFIG_PATH = os.path.join(os.path.expanduser("~"), "mandelbrot", "config.json")
 BENCH = dict(cx=-0.7499302568795561, cy=-0.015139113925433963, half=5.226737155905588e-05,
              w=960, h=540, secs=8.0)
 
-VERSION = "4.15.1"
+VERSION = "4.16.0"
 
 # ---------------- Palette (LUT 256x3 condivisa CPU/GPU) ----------------
 _FIRE = (
@@ -426,6 +437,26 @@ def set_prec(p):
 # Indice palette (0..N-1) preallocato come array size-1: evita np.asarray per render
 _PAL_IDX = [np.asarray(i, dtype=np.int32) for i in range(len(PALETTES))]
 
+# v4.16.0: buffer host pinned per il D2H (DMA, ~1,7x piu' veloce di .get()
+# pageable su frame grandi). Cache per dimensione (max 3 slot).
+# NB CuPy 14: MemoryHost rimosso -> cp.cuda.PinnedMemory (+ ptr).
+_PINNED = {}
+
+def _pinned_view(w, h):
+    """(PinnedMemory, vista numpy uint8 h*w*3) su memoria host pinned."""
+    key = (w, h)
+    ent = _PINNED.get(key)
+    if ent is None:
+        size = w * h * 3
+        pm = cp.cuda.PinnedMemory(size)
+        host = np.frombuffer((ctypes.c_ubyte * size).from_address(pm.ptr),
+                             dtype=np.uint8)
+        ent = (pm, host)
+        if len(_PINNED) >= 3:
+            _PINNED.pop(next(iter(_PINNED)))
+        _PINNED[key] = ent
+    return ent
+
 def compute_gpu(cx, cy, half, w, h, mi, buf=None, prec=None):
     global _BUF
     need = w * h * 3
@@ -450,22 +481,71 @@ def compute_gpu(cx, cy, half, w, h, mi, buf=None, prec=None):
             np.asarray(h, dtype=np.int32),
             np.asarray(mi, dtype=np.int32))
     kernel(grid, (bx, by), args)
-    return Image.fromarray(out.get().reshape((h, w, 3)))
+    # v4.16.0: D2H pinned (DMA, memcpyDeviceToHost) con fallback .get().
+    try:
+        pm, host = _pinned_view(w, h)
+        cp.cuda.runtime.memcpy(pm.ptr, out.data.ptr, w * h * 3,
+                               cp.cuda.runtime.memcpyDeviceToHost)
+        return Image.fromarray(host.reshape((h, w, 3)))
+    except Exception:
+        return Image.fromarray(out.get().reshape((h, w, 3)))
 
 # ---------------- CPU (fallback) ----------------
 
+# v4.16.0: array di lavoro CPU cacheati per (w,h) (nessuna allocazione per
+# render: offset di griglia + real/imag/c/w4/z/diverged/it riutilizzati).
+_CPU_WS = {}
+
+def _cpu_ws(w, h):
+    key = (w, h)
+    ws = _CPU_WS.get(key)
+    if ws is None:
+        ws = {
+            "X": np.arange(w) - w / 2,
+            "Y": np.arange(h) - h / 2,
+            "tx": np.empty(w),
+            "ty": np.empty(h),
+            "real": np.empty((h, w)),
+            "imag": np.empty((h, w)),
+            "c": np.empty((h, w), dtype=np.complex128),
+            "w4": np.empty((h, w), dtype=np.complex128),
+            "z": np.empty((h, w), dtype=np.complex128),
+            "diverged": np.empty((h, w), dtype=bool),
+            "it": np.empty((h, w), dtype=np.int32),
+        }
+        if len(_CPU_WS) >= 3:
+            _CPU_WS.pop(next(iter(_CPU_WS)))
+        _CPU_WS[key] = ws
+    return ws
+
 def compute_cpu(cx, cy, half, w, h, mi):
-    xs = cx + half * (np.arange(w) - w / 2) / (w / 2)
-    ys = cy + half * (h / w) * (np.arange(h) - h / 2) / (h / 2)
-    real, imag = np.meshgrid(xs, ys)
-    c = real + 1j * imag
-    z = np.zeros_like(c)
-    diverged = np.zeros(c.shape, dtype=bool)
-    it = np.zeros(c.shape, dtype=np.int32)
+    ws = _cpu_ws(w, h)
+    real, imag = ws["real"], ws["imag"]
+    # Ordine delle operazioni IDENTICO al codice originale (bit-identita'
+    # garantita): xs = cx + (half*X)/(w/2); ys = cy + ((half*h/w)*Y)/(h/2).
+    np.multiply(ws["X"], half, out=ws["tx"])
+    ws["tx"] /= (w / 2)
+    ws["tx"] += cx
+    np.multiply(ws["Y"], half * (h / w), out=ws["ty"])
+    ws["ty"] /= (h / 2)
+    ws["ty"] += cy
+    np.copyto(real, ws["tx"][None, :])
+    np.copyto(imag, ws["ty"][:, None])
+    c = ws["c"]
+    np.multiply(imag, 1j, out=c)
+    c += real
+    z = ws["z"]
+    z.fill(0)
+    diverged = ws["diverged"]
+    diverged.fill(False)
+    it = ws["it"]
+    it.fill(0)
     # Interior analitico (stesso criterio del kernel GPU): bulbo periodica-2 +
     # cardioide principale (|1 - sqrt(1 - 4c)| < 1). Questi pixel non divergono
     # mai -> restano it=0 (neri) ed esclusi dal loop: ~2.5x sulla CPU.
-    w4 = 1.0 - 4.0 * c
+    w4 = ws["w4"]
+    np.multiply(c, -4.0, out=w4)
+    w4 += 1.0
     diverged |= (np.abs(w4) < 2.0 * np.sqrt(0.5 * (np.abs(w4) + np.real(w4))))
     diverged |= (np.abs(c + 1.0) <= 0.25)
     with np.errstate(over="ignore", invalid="ignore"):
@@ -497,6 +577,20 @@ def compute(cx, cy, half, w, h, mi, buf=None, prec=None):
     if _USE_GPU:
         return compute_gpu(cx, cy, half, w, h, mi, buf=buf, prec=prec)
     return compute_cpu(cx, cy, half, w, h, mi)
+
+# v4.16.0: warmup GPU in background all'avvio: init context CUDA, module load
+# e prime allocazioni (buffer device + pinned) pagati FUORI dal primo render
+# reale (che senza warmup e' 8-17 ms piu' lento).
+def _gpu_warmup():
+    try:
+        compute_gpu(CX0, CY0, HALF0, 64, 64, 64, prec="f32")
+        if _KERNEL_F64 is not None:
+            compute_gpu(CX0, CY0, HALF0, 64, 64, 64, prec="f64")
+    except Exception:
+        pass
+
+if _GPU:
+    threading.Thread(target=_gpu_warmup, daemon=True).start()
 
 def bench_engine():
     return "CUDA f32" if _GPU else "CPU f64 (GPU non disponibile)"

@@ -16,13 +16,11 @@
 >   obsoleto (la vista è cambiata) va comunque completato; su CPU è il lavoro sprecato
 >   peggiore durante pan/zoom rapidi.
 
-## Decisioni da prendere PRIMA di partire
-1. **Numba** (dipendenza nuova, wheel pura, ~10–50× su CPU) — o solo **tiling+threads**
-   numpy puro (no dipendenze, ~4–8×)? *Raccomandazione: Numba, con fallback numpy.*
-2. **Render progressivo** (strisce verticali che appaiono in sequenza) — o mantenere
-   preview ¼ → full? *Raccomandazione: opzionale, fase 4.*
-3. Modalità **CPU f32** (veloce ~2×, meno precisa in zoom profondo) — o mantenere solo
-   f64? *Raccomandazione: no (la GPU f32 già copre il caso "veloce").*
+## Decisioni (CONFERMATE 2026-08-30 dall'utente)
+1. **Numba** per la CPU (dipendenza nuova, wheel pura, ~10–50×), con **fallback numpy**
+   (l'attuale percorso resta come riferimento per il gate).
+2. **Render progressivo**: opzionale, solo se utile (Fase 3.11), dietro flag.
+3. **CPU resta solo f64** (no f32): la GPU f32 già copre il caso "veloce".
 
 ---
 
@@ -46,21 +44,42 @@ Allocazioni+prefiltro CPU: ~10,5 ms/render (minimo; il loop è il 99%).
 GPU f64 ≈ 32× più lenta di f32 (nota spec confermata); sulla GPU il kernel domina
 (D2H/PIL <10%); zone quasi paraboliche (z3) costano 50× più di z1 a parità di risoluzione.
 
-## Fase 1 — Quick wins a basso rischio (~1 g)
-1. **Warmup GPU in background all'avvio**: dopo l'import, thread daemon che fa un
-   launch dummy (32×32) + `out.get()` → context init, module load, prime allocazioni
-   pagati fuori dal primo render reale. (Oggi il primo render include tutto questo.)
-2. **D2H pinned**: buffer host pinned (`cp.cuda.MemoryHost`) cacheato per dimensione;
-   `copy_from_device` (DMA) + `view()` → niente allocazione pageable a frame e copia
-   ~1,5–2× più veloce su frame grandi.
-3. **Cache array CPU per (w,h)**: `xs, ys, real, imag, c, w4, diverged, it` allocati
-   una volta e riusati (dict keyed by (w,h), max 3 dimensioni). Elimina ~30–40% del
-   costo CPU a vista fissa.
-4. **Micro-benchmark launch config GPU**: 1 vs 2 vs 4 px/thread, block 16×16 vs 32×8 vs
-   8×32, `launch_bounds` coerente; scegliere il best per f32 (f64: solo 1–2 px/thread).
-   Risultato in STORICO + spec.
-5. Preallocazione degli argomenti scalari `np.asarray` (dict per precisione) — effetto
-   minimo, costo minimo.
+## Fase 1 — Quick wins a basso rischio (~1 g) — **FATTA 2026-08-30 (v4.16.0)**
+- [x] 1. **Warmup GPU in background all'avvio**: thread daemon, render 64×64 f32+f64
+      all'import → context init, module load, prime allocazioni (device + pinned)
+      pagati fuori dal primo render reale.
+- [x] 2. **D2H pinned**: buffer host pinned cacheato per dimensione (max 3 slot) +
+      `runtime.memcpy(..., memcpyDeviceToHost)`, fallback `.get()`. **Copia D2H
+      misurata 0,24 vs 0,42 ms (1,7×)** a 960×540.
+      ⚠ **CuPy 14**: `cp.cuda.MemoryHost` NON esiste più → `cp.cuda.PinnedMemory(size)`
+      (+`.ptr`) e `cp.cuda.runtime.memcpy(dst, src, n, kind)`; la vista numpy si fa
+      con `np.frombuffer((ctypes.c_ubyte*n).from_address(ptr), dtype=np.uint8)`.
+      ⚠ Un `except Exception` silenzioso sul percorso pinned ha mascherato l'errore di
+      API (fallback `.get()` funzionante): verificare che il percorso nuovo sia
+      EFFETTIVAMENTE usato, non solo che non errori.
+- [x] 3. **Cache array CPU per (w,h)**: offset di griglia + real/imag/c/w4/z/diverged/it
+      riutilizzati (max 3 dimensioni). **Gate bit-identico PASS** (stesso ordine delle
+      operazioni!): `cx + half*X/(w/2)` NON è `cx + (half*(X/(w/2)))` (associatività
+      IEEE) — il primo attempt rompeva la bit-identità in z1 (maxdiff 255) e passava
+      in z2/z3 per fortuna → il gate multi-zona è indispensabile.
+- [ ] 4. **Micro-benchmark launch config GPU**: rinviato alla Fase 3 (il kernel in z3
+      è dominato dall'algebra, non dal launch; valutare lì con config reali).
+- [x] 5. Preallocazione argomenti scalari: già presente (`_PAL_IDX`); l'ulteriore scartato.
+
+### Verifiche (v4.16.0)
+- **Gate correttezza**: bit-identico a v4.15.1 su 3 zone × (GPU f32, GPU f64, CPU) — PASS.
+- **A/B CPU stesso processo** (v4.15.1 reale da git vs v4.16.0, 3 round alternati):
+  z1 3360→3349 ms (−0,3%), z3 18514→18557 ms (+0,2%) → **pari nel rumore**
+  (la cache toglie ~10 ms di allocazioni, sotto la soglia di misura qui).
+- **Baseline cross-run** (GPU 4070 SUPER CONDIVISA con llama-server, ~90% util):
+  GPU f32 z1 1,02→0,95 ms, z2 1,40→1,21 ms, z3 4,36→4,37 ms; CPU cross-run non
+  affidabile (±30% di rumore per carico di fondo; l'A/B in-process è la misura valida).
+- ⚠ **Ambiente**: la GPU è condivisa con il server LLM locale (llama.cpp) che DEVE
+  restare attivo (l'agente ci gira sopra): benchmark con workload GPU bounded
+  (spin a 20 launch fissi, non a tempo) e misure confrontate a parità di condizioni.
+- ⚠ **Artefatto clock**: dopo pause lunghe (run CPU 3–18 s) il GPU è a clock idle e la
+  prima misura è 10–15× più lenta (z3: 49 ms invece di 4,4). `baseline.py` ora scalda
+  il clock prima di ogni misura.
 
 ## Fase 2 — Rewrite CPU (dove sta il guadagno, ~2 g)
 6. **Escape loop Numba** (`@njit(parallel=True)`, `fastmath` come flag testabile):

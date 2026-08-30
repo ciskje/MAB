@@ -56,6 +56,14 @@ def gpu_split(m, cp, cx, cy, half, mi, prec):
             np.asarray(H, np.int32), np.asarray(mi, np.int32))
     # CuPy 14: Event senza elapsed_time -> misuro con perf_counter + sync
     # (include l'overhead di launch, ~decine di us; coerente tra versioni).
+    # NB: prima della misura si "scalda" il clock GPU con un numero FISSO di
+    # launch (non a tempo: su GPU condivisa/congestionata una coda lunga
+    # farebbe aspettare moltissimo il sync): dopo pause lunghe (es. run CPU
+    # da 3-18 s) il GPU e' a clock idle e la prima misurazione sarebbe 10-15x
+    # piu' lenta del valore a regime.
+    cp.cuda.Stream.null.synchronize()
+    for _ in range(20):
+        kernel(grid, (bx, by), args)
     cp.cuda.Stream.null.synchronize()
     t0 = time.perf_counter()
     kernel(grid, (bx, by), args)
