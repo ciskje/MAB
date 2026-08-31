@@ -34,6 +34,14 @@ progetto) DEVE:
 Il blocco è intitolato "Insieme di Mandelbrot - visualizzatore interattivo"
 e si trova in cima al file.
 
+## Build dell'app (OBBLIGATORIO prima di ogni commit)
+Prima di committare DEVE essere rigenerata l'app self-contained, così
+`dist/Mandelbrot.app` riflette esattamente il sorgente che viene committato.
+- Ordine: modifica sorgente → `./build_app.sh` → (verifica) → `git commit`.
+- Comando: `./build_app.sh` (icona → PyInstaller one-dir → fix libomp → firma ad-hoc).
+- `dist/`, `build/`, `mandelbrot.icns`, `icon_src.png` sono gitignorati: l'app NON va
+  committata, ma va SEMPRE rigenerata prima del commit per lasciarla aggiornata.
+
 ## Note operative
 - Gotchas di implementazione (bit-identità, numpy FMA, Numba, vincoli CuPy,
   Metal/pyobjc (v5.4.0), `__constant__`, pinned memory): vedi la sezione "Note
