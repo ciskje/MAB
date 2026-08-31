@@ -1,7 +1,7 @@
 # Visualizzatore Mandelbrot — spec di ricreazione
 
 Descrizione concisa ma sufficiente perché un altro LLM (o sviluppatore) ricrei il
- programma da zero. Riferimento: `mandel.py` (un solo file), sincronizzata alla **v5.4.3**.
+ programma da zero. Riferimento: `mandel.py` (un solo file), sincronizzata alla **v5.4.4**.
 Ogni modifica al sorgente DEVE aggiornare anche questa spec (vedi AGENTS.md).
 
 ## Panoramica

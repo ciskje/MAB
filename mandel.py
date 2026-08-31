@@ -1,11 +1,16 @@
 # ============================================================================
 # Insieme di Mandelbrot - visualizzatore interattivo
-# VERSIONE: 5.4.3
+# VERSIONE: 5.4.4
 # ----------------------------------------------------------------------------
 # REGOLA: ogni modifica incrementa la versione e aggiunge una voce qui sotto
 # (formato: versione - data - descrizione modifiche).
 #
 # STORICO:
+# 5.4.4 - 2026-08-31
+#   - Icona app: palette cambiata da 'termal' (che parte col ghiaccio, percio'
+#     l'icona risultava 'ghiacciata') a 'fuoco'. make_icon.py usa ora
+#     apply_palette('fuoco'), coerente con la palette di default dell'app.
+#     Nessuna modifica al rendering/program: solo la palette dell'icona.
 # 5.4.3 - 2026-08-31
 #   - FIX: il pulsante 'Annulla' del dialog di conferma benchmark non aveva
 #     alcun command -> clic inerte (funzionavano solo il tasto X ed Esc).
@@ -412,7 +417,7 @@ CONFIG_PATH = os.path.join(os.path.expanduser("~"), "mandelbrot", "config.json")
 BENCH = dict(cx=-0.7499302568795561, cy=-0.015139113925433963, half=5.226737155905588e-05,
              w=960, h=540, secs=8.0)
 
-VERSION = "5.4.3"
+VERSION = "5.4.4"
 
 # ---------------- Palette (LUT 256x3 condivisa CPU/GPU) ----------------
 _FIRE = (
