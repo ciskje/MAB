@@ -20,6 +20,13 @@ hello_world.py
 .venv/
 venv/
 
+# Build / packaging (eseguibile self-contained)
+dist/
+build/
+# Artifacts generati da build_app.sh / make_icon.py
+mandelbrot.icns
+icon_src.png
+
 # OS
 Thumbs.db
 .DS_Store

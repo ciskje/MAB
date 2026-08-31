@@ -1,11 +1,37 @@
 # ============================================================================
 # Insieme di Mandelbrot - visualizzatore interattivo
-# VERSIONE: 5.4.0
+# VERSIONE: 5.4.3
 # ----------------------------------------------------------------------------
 # REGOLA: ogni modifica incrementa la versione e aggiunge una voce qui sotto
 # (formato: versione - data - descrizione modifiche).
 #
 # STORICO:
+# 5.4.3 - 2026-08-31
+#   - FIX: il pulsante 'Annulla' del dialog di conferma benchmark non aveva
+#     alcun command -> clic inerte (funzionavano solo il tasto X ed Esc).
+#     Ora ha un comando (win._annullato=True + destroy) e annulla come
+#     promesso da docstring/spec.
+# 5.4.2 - 2026-08-31
+#   - UI: rimossa la macchina del tema Chiaro/Scuro (THEMES/_apply_theme/_recolor,
+#     radio "Tema:" in toolbar, chiave "theme" in config): forzarne i colori su
+#     tk.Button/Checkbutton/Radiobutton su macOS li degradava a widget flat con
+#     cornice nera e testo illeggibile, soprattutto in Dark Mode. I controlli
+#     tornano widget nativi: seguono il tema del sistema (scuro->bottone aqua
+#     scuro con testo chiaro, nessuna cornice) e restano sempre leggibili. I
+#     dialog di benchmark usano il colore testo di sistema (dinamico) e solo gli
+#     accenti OK/KO in toni medi leggibili sia su chiaro che su scuro.
+# 5.4.1 - 2026-08-31
+#   - UI: tema selezionabile Chiaro/Scuro (radio button "Tema:" in toolbar,
+#     persistito in config sotto "theme", default "dark"). Causa: su macOS in
+#     Dark Mode tk.Button ha fg='Black' di default + i dialog di benchmark usano
+#     testi scuri (#444/#555/#0a7d33/#b00020) -> testo scuro su sfondo scuro =
+#     toolbar (−1000/+1000, Benchmark, Reset), label e i dialog 'prima/dopo' il
+#     benchmark invisibili. Ogni tema e' autosufficiente (bg+fg coerenti) e
+#     applicato su tutte le widget via option_add + ri-coloring a runtime
+#     (MandelbrotApp._apply_theme/_recolor); i dialog di benchmark usano i colori
+#     del tema attivo (verde/rosso/tenue). Sempre leggibile, indipendente dal
+#     tema di sistema. Reset NON cambia il tema (e' una preferenza UI).
+#     Solo colori UI, nessun effetto sul rendering.
 # 5.4.0 - 2026-08-31
 #   - NUOVO BACKEND GPU METAL (Apple Silicon): lo slot "GPU" e' ORA generico
 #     (Motore CPU/GPU, config "cpu"/"gpu"). Su questa Mac GPU=Metal, su una
@@ -386,7 +412,7 @@ CONFIG_PATH = os.path.join(os.path.expanduser("~"), "mandelbrot", "config.json")
 BENCH = dict(cx=-0.7499302568795561, cy=-0.015139113925433963, half=5.226737155905588e-05,
              w=960, h=540, secs=8.0)
 
-VERSION = "5.4.0"
+VERSION = "5.4.3"
 
 # ---------------- Palette (LUT 256x3 condivisa CPU/GPU) ----------------
 _FIRE = (
@@ -1767,13 +1793,11 @@ class MandelbrotApp:
         body.pack(fill="both", expand=True)
         tk.Label(body, text="Benchmark standardizzato",
                  font=("Segoe UI", 14, "bold")).pack(anchor="w")
-        tk.Label(body, text="Parametri del test (regione e durata comparabili tra versioni):",
-                 foreground="#555").pack(anchor="w", pady=(2, 12))
+        tk.Label(body, text="Parametri del test (regione e durata comparabili tra versioni):").pack(anchor="w", pady=(2, 12))
         rows = tk.Frame(body)
         rows.pack(fill="x")
         for i, (k, v) in enumerate(self._bench_rows()):
-            tk.Label(rows, text=k, width=12, anchor="w",
-                     foreground="#444").grid(row=i, column=0, sticky="w", pady=3)
+            tk.Label(rows, text=k, width=12, anchor="w").grid(row=i, column=0, sticky="w", pady=3)
             tk.Label(rows, text=v, anchor="e",
                      font=("Consolas", 12)).grid(row=i, column=1, sticky="e",
                                                   padx=(18, 0), pady=3)
@@ -1783,7 +1807,10 @@ class MandelbrotApp:
         def go(_e=None):
             win._annullato = False
             win.destroy()
-        annulla = tk.Button(btns, text="Annulla")
+        def cancel(_e=None):
+            win._annullato = True
+            win.destroy()
+        annulla = tk.Button(btns, text="Annulla", command=cancel)
         annulla.pack(side="right")
         avvia = tk.Button(btns, text="Avvia", command=go)
         avvia.pack(side="right", padx=(0, 10))
@@ -1801,28 +1828,26 @@ class MandelbrotApp:
         tk.Label(body, text="Risultato",
                  font=("Segoe UI", 14, "bold")).pack(anchor="w")
         if count > 0:
-            tk.Frame(body, bg="#e6f4ea", height=1).pack(fill="x", pady=(10, 0))
+            tk.Frame(body, bg="#8a8a8a", height=1).pack(fill="x", pady=(10, 0))
             tk.Label(body, text=f"{count/secs:.2f}",
                      font=("Segoe UI", 42, "bold"),
-                     foreground="#0a7d33").pack(pady=(16, 0))
+                     foreground="#2ea44f").pack(pady=(16, 0))
             tk.Label(body, text="rendering / secondo",
                      font=("Segoe UI", 13, "bold"),
-                     foreground="#0a7d33").pack(pady=(0, 8))
+                     foreground="#2ea44f").pack(pady=(0, 8))
             tk.Label(body, text=f"{count} rendering in {secs:.1f} s   \u00b7   {secs/count*1000:.0f} ms ciascuno",
-                     foreground="#555").pack(pady=(0, 16))
+            ).pack(pady=(0, 16))
         else:
             tk.Label(body, text="BENCHMARK FALLITO",
                      font=("Segoe UI", 20, "bold"),
-                     foreground="#b00020").pack(pady=(16, 6))
-            tk.Label(body, text=str(err), foreground="#b00020",
+                     foreground="#e5534b").pack(pady=(16, 6))
+            tk.Label(body, text=str(err), foreground="#e5534b",
                      wraplength=420, justify="left").pack(anchor="w", pady=(0, 16))
-        tk.Label(body, text="Parametri del test:",
-                 foreground="#555").pack(anchor="w", pady=(0, 4))
+        tk.Label(body, text="Parametri del test:").pack(anchor="w", pady=(0, 4))
         rows = tk.Frame(body)
         rows.pack(fill="x", anchor="w")
         for i, (k, v) in enumerate(self._bench_rows()):
-            tk.Label(rows, text=k, width=12, anchor="w",
-                     foreground="#444").grid(row=i, column=0, sticky="w", pady=2)
+            tk.Label(rows, text=k, width=12, anchor="w").grid(row=i, column=0, sticky="w", pady=2)
             tk.Label(rows, text=v, anchor="e",
                      font=("Consolas", 11)).grid(row=i, column=1, sticky="e",
                                                   padx=(18, 0), pady=2)

@@ -1,7 +1,7 @@
 # Visualizzatore Mandelbrot — spec di ricreazione
 
 Descrizione concisa ma sufficiente perché un altro LLM (o sviluppatore) ricrei il
-programma da zero. Riferimento: `mandel.py` (un solo file), sincronizzata alla **v5.4.0**.
+ programma da zero. Riferimento: `mandel.py` (un solo file), sincronizzata alla **v5.4.3**.
 Ogni modifica al sorgente DEVE aggiornare anche questa spec (vedi AGENTS.md).
 
 ## Panoramica
@@ -20,6 +20,14 @@ Ogni modifica al sorgente DEVE aggiornare anche questa spec (vedi AGENTS.md).
   `−1000`/`+1000`, Benchmark, Reset), canvas, barra di stato `messaggio | backend | palette | render: N ms`.
   Font 13 pt. Menu File: Salva immagine…, Carica zona…, Salva zona, Salva zona con nome…, Esci.
 - Titolo: `Insieme di Mandelbrot v<VER> - <backend>` + ` - <file zona corrente>` se presente.
+- **Tema UI (v5.4.2)**: l'UI usa i **widget nativi macOS** (nessun colore forzato) che
+  seguono il tema del **sistema** — in Dark Mode i bottoni/checkbox/radio restano
+  aqua scuri con testo chiaro, senza la cornice nera che si otteneva forzando un
+  `background` esplicito (v5.4.1 li degradava a widget *flat*, testo illeggibile).
+  I dialog di benchmark usano il **colore testo di sistema** (dinamico, sempre
+  leggibile su chiaro e scuro); solo gli accenti OK/KO sono fissi in toni medi che
+  leggono su entrambi (`#2ea44f`/`#e5534b`) e il divisore è grigio medio (`#8a8a8a`).
+  **Solo colori UI, nessun effetto sul rendering.**
 
 ## Rendering
 - `z = z² + c`, escape `|z|² > 4`; punti interni = **nero** (early-exit nel loop).
@@ -156,7 +164,7 @@ da questo registro.
   non viene più ripristinato dalla config) → "Salva zona" chiede sempre il nome finché
   l'utente non carica/salva esplicitamente una zona in quella sessione.
 - **Config**: `~/mandelbrot/config.json` con
-  `precision, palette, backend, bench` — `backend` ∈ {`"cpu"`, `"gpu"`} (v5.4.0; un
+   `precision, palette, backend, bench` — `backend` ∈ {`"cpu"`, `"gpu"`} (v5.4.0; un
   vecchio valore `"cuda"` è mappato su `"gpu"` alla lettura) — (la **vista** `cx, cy,
   half, mi, mi_auto` e `view_file` non sono più persistite: v5.1.1/v5.1.2, eventuali
   vecchi valori in config esistenti sono ignorati); salvata all'uscita e **throttled
