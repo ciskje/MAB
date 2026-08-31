@@ -1,11 +1,21 @@
 # ============================================================================
 # Insieme di Mandelbrot - visualizzatore interattivo
-# VERSIONE: 5.4.4
+# VERSIONE: 5.4.5
 # ----------------------------------------------------------------------------
 # REGOLA: ogni modifica incrementa la versione e aggiunge una voce qui sotto
 # (formato: versione - data - descrizione modifiche).
 #
 # STORICO:
+# 5.4.5 - 2026-08-31
+#   - Icona app: ripristinata la palette 'termal' (la 5.4.4 l'aveva portata a
+#     'fuoco'; su richiesta torna 'termal'). make_icon.py usa di nuovo
+#     apply_palette('termal').
+#   - Menu File "Salva zona": ora DISABILITATO finche' non esiste un nome/file
+#     di zona (view_file=None, es. all'avvio); si abilita dopo "Salva zona con
+#     nome..." o "Carica zona...". Prima faceva fallback a 'chiedi nome'; ora
+#     l'utente deve definire esplicitamente il primo nome con "Salva zona con
+#     nome...". Aggiunto MandelbrotApp._update_save_zone_state() che gestisce
+#     lo stato dell'entry menu, chiamato all'init e dopo salvataggio/caricamento.
 # 5.4.4 - 2026-08-31
 #   - Icona app: palette cambiata da 'termal' (che parte col ghiaccio, percio'
 #     l'icona risultava 'ghiacciata') a 'fuoco'. make_icon.py usa ora
@@ -417,7 +427,7 @@ CONFIG_PATH = os.path.join(os.path.expanduser("~"), "mandelbrot", "config.json")
 BENCH = dict(cx=-0.7499302568795561, cy=-0.015139113925433963, half=5.226737155905588e-05,
              w=960, h=540, secs=8.0)
 
-VERSION = "5.4.4"
+VERSION = "5.4.5"
 
 # ---------------- Palette (LUT 256x3 condivisa CPU/GPU) ----------------
 _FIRE = (
@@ -1298,12 +1308,21 @@ class MandelbrotApp:
         self.mfile.add_command(label="Salva immagine... (Ctrl+S)", command=self.save_png)
         self.mfile.add_command(label="Carica zona...", command=self.load_zone_as)
         self.mfile.add_command(label="Salva zona", command=self.save_zone)
+        self.save_zone_entry = self.mfile.index(tk.END)
         self.mfile.add_command(label="Salva zona con nome...", command=self.save_zone_as)
         self.mfile.add_separator()
         self.mfile.add_command(label="Esci", command=self.on_exit)
         self.menu.add_cascade(label="File", menu=self.mfile)
         self.root.config(menu=self.menu)
         self.root.protocol("WM_DELETE_WINDOW", self.on_exit)
+        self._update_save_zone_state()
+
+    def _update_save_zone_state(self):
+        # "Salva zona" e' disponibile solo se esiste gia' un nome/file di zona
+        # (view_file); altrimenti va prima definito con "Salva zona con nome..."
+        # o con "Carica zona...".
+        state = "normal" if self.view_file else "disabled"
+        self.mfile.entryconfig(self.save_zone_entry, state=state)
 
     def _bind_events(self):
         self.press_pos = None
@@ -1647,6 +1666,7 @@ class MandelbrotApp:
                 f.write("\n")
             self.view_file = path
             self._refresh_title()
+            self._update_save_zone_state()
             self.status.config(text="zona salvata: " + path)
         except Exception as ex:
             self.status.config(text="errore salvataggio zona: " + str(ex))
@@ -1677,6 +1697,7 @@ class MandelbrotApp:
         self.mi_plus.config(state=st)
         self.view_file = path
         self._refresh_title()
+        self._update_save_zone_state()
         self.request_render("zona caricata: " + os.path.basename(path))
 
     def save_config(self):
