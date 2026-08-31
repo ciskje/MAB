@@ -13,8 +13,6 @@
 - `baseline/*.npy` — frame di riferimento (3 zone × GPU f32/f64 + CPU v5.2.x);
   usati dal gate. (I riferimenti CPU v4.15.1 storici sono stati rimossi in v5.2.1,
   recuperabili dalla storia git.) `baseline.txt` = ultimo report misure.
-- `PIANO-REINGEGNERIZZAZIONE.md` — piano storico della reingegnerizzazione v5
-  (fatto; conservato come documento di decisioni, non da aggiornare a ogni fix).
 - `mandelbrot_*.json` — zone salvate dall'app (dato utente, gitignorato).
 
 ## Versionamento sorgente (OBBLIGATORIO)
