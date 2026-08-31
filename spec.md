@@ -1,12 +1,13 @@
 # Visualizzatore Mandelbrot — spec di ricreazione
 
 Descrizione concisa ma sufficiente perché un altro LLM (o sviluppatore) ricrei il
-programma da zero. Riferimento: `mandel.py` (un solo file), sincronizzata alla **v5.2.1**.
+programma da zero. Riferimento: `mandel.py` (un solo file), sincronizzata alla **v5.4.0**.
 Ogni modifica al sorgente DEVE aggiornare anche questa spec (vedi AGENTS.md).
 
 ## Panoramica
-- Un solo file **Python 3.12**: GUI **tkinter**, rendering **CUDA (CuPy `RawKernel`)**
-  con fallback **CPU (numpy)**, Pillow per il PNG.
+- Un solo file **Python 3.12**: GUI **tkinter**, rendering **GPU** (slot generico:
+  **CUDA (CuPy `RawKernel`)** su NVIDIA, **Metal (pyobjc)** su Apple Silicon) con
+  fallback **CPU (numpy/Numba)**, Pillow per il PNG.
 - Esecuzione asincrona: il render gira su thread separato, l'UI non si blocca mai.
 - Metodi di `MandelbrotApp` raggruppati per funzione: UI, vista, controlli, pipeline, file, benchmark.
 
@@ -30,16 +31,28 @@ Ogni modifica al sorgente DEVE aggiornare anche questa spec (vedi AGENTS.md).
   numerica); coloring continuo `nu = it + 1 − log2(0.5·ln|z|²)`, `t = (nu/mi)^0.35`.
   **CPU** (v5.2.0): **stesso** coloring continuo della GPU `nu = it + 1 − log2(0.5·ln|z|²)`,
   `t = (nu/mi)^0.35` (il kernel Numba/fallback esportano anche `mag = |z|²` alla fuga);
-  solo i pixel mai fuggiti (`mag==0`) restano neri. CPU e CUDA producono lo stesso colore
-  (a parte 1-2 ULP di `log2`/`log` libm-vs-CUDA → ≤1 entry di LUT; verificato dal gate).
+  solo i pixel mai fuggiti (`mag==0`) restano neri. CPU e GPU (CUDA/Metal) producono lo
+  stesso colore (a parte 1-2 ULP di `log2`/`log` libm-vs-kernel → ≤1 entry di LUT;
+  verificato dal gate).
   (v≤5.1.x: `t=(it/mi)^0.35` + `rgb[it==0]=0`, che anneriva anche i punti "lontani" fuggiti
   alla 1ª iterazione — bug CPU-nero/CUDA-rosso, corretto in v5.2.0).
 - **LUT 256×3** condivisa CPU/GPU: `np.interp` delle stop su 256 punti, ×255, clip, uint8;
   colore = `LUT[round(t·255)]`.
-- **Kernel GPU**: 1 px/thread (v5.0.0: micro-benchmark A/B, 1.8× su z1 / 1.1× su z3
+- **Kernel GPU (CUDA)**: 1 px/thread (v5.0.0: micro-benchmark A/B, 1.8× su z1 / 1.1× su z3
   vs 2 px/thread; le varianti sono bit-identiche tra loro), `__launch_bounds__(256)`,
   block 16×16, grid `(⌈w/16⌉, ⌈h/16⌉)`, `--use_fast_math`; 2 varianti (f32/f64) dalla
   stessa sorgente parametrizzata; NVRTC lazy.
+- **Kernel GPU (Metal, Apple Silicon; v5.4.0)**: kernel MSL `mandel`, 1 px/thread,
+  threadgroup 16×16 (256), grid `(⌈w/16⌉, ⌈h/16⌉)`; **stesso** criterio di escape,
+  interior analitico e coloring smooth del kernel CUDA e della CPU (le tre vie producono
+  lo stesso colore, a parte 1-qualche ULP di FMA/contrazione sul bordo caotico).
+  Parametri `(cx,cy,half,w,h,mi,pal)` in uno **struct** passato via buffer `[[buffer(1)]]`
+  (ne' scalari nudi ne' `[[buffer]]` su singoli float); output RGB888 in buffer
+  `[[buffer(0)]]`; LUT incornicate nel sorgente MSL (una `constant` per palette, come
+  CUDA). **f32-only**: su Apple Silicon `double` non è supportato → il backend Metal non
+  fa f64 (f64 resta solo CPU/CUDA). Deterministico (2 run bit-identici). H2D/D2H via
+  `buf.contents().as_buffer(N)` (memoryview scrivibile, C-level, ~0.01 ms). 12–30× più
+  veloce della CPU (misurato su M1, v5.4.0).
 - **D2H pinned (v4.16.0)**: buffer host pinned cacheato per dimensione
   (`cp.cuda.PinnedMemory` + `cp.cuda.runtime.memcpy(..., memcpyDeviceToHost)`, DMA ~1,7×
   del `.get()` pageable), con fallback `.get()`. La vista numpy: `np.frombuffer` su
@@ -47,16 +60,31 @@ Ogni modifica al sorgente DEVE aggiornare anche questa spec (vedi AGENTS.md).
 - **Warmup GPU all'avvio (v4.16.0)**: thread daemon che all'import fa un render 64×64
   (f32 e f64) → init context CUDA, module load e prime allocazioni (device + pinned)
   pagati FUORI dal primo render reale.
-- **CPU (v4.16.0)**: array di lavoro cacheati per (w,h) (offset di griglia +
-  real/imag/c/w4 + work arrays riutilizzati, max 3 dimensioni): nessuna allocazione per
-  render.
+- **CPU (v4.16.0)**: array di lavoro cacheati per (w,h,prec) (v5.3.0: per precisione,
+  offset di griglia + real/imag/c/w4 + work arrays riutilizzati, max 6 dimensioni):
+  nessuna allocazione per render.
 - **CPU (v5.0.0)**: escape loop in **Numba** `@njit(parallel=True)` (dipendenza
-  opzionale): parallelo sulle righe (`prange`), early-exit per pixel, f64; geometry,
+  opzionale): parallelo sulle righe (`prange`), early-exit per pixel; geometry,
   interior analitico e coloring restano in numpy (il kernel Numba produce `it[]` e,
   da v5.2.0, `mag[] = |z|²` alla fuga, usato dal coloring smooth).
-  **Self-test di bit-identità** all'avvio (thread, 4×4 con casi limite, `it[]` **e** `mag[]`,
-  vs il loop numpy di riferimento) → se fallisce o Numba è assente, **fallback numpy automatico** (stesso loop,
-  stesso gate). Warmup/compilazione Numba in thread all'avvio (fuori dal primo render).
+  **CPU f32/f64 (v5.3.0)**: la precisione (f32/f64) vale anche per il motore CPU
+  (prima sempre f64): tutti gli array di lavoro sono del dtype corrispondente
+  (X/Y restano f64: il prodotto con `half` si calcola in f64 e si arrotonda al
+  dtype target), il kernel Numba si **auto-specializza** su `complex64`/`complex128`,
+  il fallback numpy usa la stessa sequenza di ufunc in parti esplicite (no FMA)
+  anche in f32.
+   **Self-test** all'avvio (thread, 4×4 con casi limite, vs il loop numpy di
+   riferimento), **una precisione per volta** (v5.3.0) → se fallisce per una
+   precisione (o Numba è assente), **fallback numpy automatico per quella
+   precisione** (stesso loop, stesso gate). Criterio per precisione: **f64 =
+   bit-identità** di `it[]` **e** `mag[]` (Numba f64 e numpy f64 usano la stessa
+   aritmetica); **f32 = `it[]` (decisioni di fuga) esatto + `mag[]` entro 1e-2
+   relativo** — in f32 Numba/LLVM contrae in FMA / riassocia in modo *dipendente
+   dal contesto del loop* (comportamento intrinseco, non riproducibile in modo
+   affidabile con numpy), la differenza è 1-qualche ULP su una piccolissima
+   frazione di pixel di bordo caotico (al più 1 entry di LUT nel coloring).
+   Warmup/compilazione Numba di entrambe le precisioni in thread all'avvio
+   (fuori dal primo render).
   **Cancellazione cooperativa**: ogni nuovo job incrementa il contatore di
   "generazione" (`_GEN`); il percorso Numba divide le righe in **16 bande** e
   controlla il contatore **a livello Python tra le bande** (un check in-kernel
@@ -85,9 +113,27 @@ da questo registro.
   sul valore auto corrente**.
 
 ## Backend e precisione
-- CPU: numpy, sempre **f64**. GPU: **f32** (default) o **f64** (~32× più lenta su GPU consumer).
-- Toggle runtime CPU/CUDA; senza CUDA i controlli CUDA/f64 sono disabilitati. Il kernel f64
-  è compilato alla partenza: se fallisce, resta disabilitato (si resta in f32).
+- CPU: numpy/Numba, **f32** o **f64** (v5.3.0; prima sempre f64).
+- **Slot GPU generico (v5.4.0)**: UI e config espongono "Motore CPU / GPU" (non più
+  "CPU/CUDA"). Rilevamento all'avvio: **preferisco CUDA** (ha f64) se c'è un driver
+  NVIDIA, altrimenti **Metal** (pyobjc, Apple Silicon). `_GPU_BACKEND` ∈ {`"cuda"`,
+  `"metal"`, `None`}; `compute_gpu` è un dispatcher (`_compute_gpu_cuda` /
+  `_compute_gpu_metal`). `backend()` mostra "CUDA f32|f64" / "Metal f32" / "CPU f32|f64".
+- **f64**: disponibile su CPU (Numba) e su CUDA (se il kernel f64 si compila). **Metal
+  è f32-only** (su Apple Silicon `double` non è supportato). Di conseguenza:
+  - la precisione è un unico settaggio globale (default f32), ma il **bottone f64 ha
+    stato dinamico**: abilitato solo se lo slot corrente lo fa — CPU sempre, CUDA con
+    kernel f64, **Metal mai** (`_sync_precision_buttons`, chiamato a ogni cambio motore,
+    in `set_backend`/`reset`/`load_config`);
+  - passando a un motore f32-only con f64 attiva, si torna a f32;
+  - `set_prec`/`_select_precision` rifiutano f64 se lo slot corrente non lo fa.
+- Senza GPU il motore GPU è disabilitato (f32/f64 restano selezionabili sulla CPU).
+  Con Metal attivo il bottone f64 è disabilitato; tornando a CPU f32/f64 sono di nuovo
+  selezionabili.
+- **Nota (misurata in v5.3.0)**: f32 NON accelera il loop di escape (catena dipendente
+  seriale, latency-bound: scalare f32 ≈ scalare f64, in deep zoom leggermente più
+  lento); il guadagno è solo sui passi memory-bound (geometria/prefiltro/coloring):
+  ~1.6–1.7× sulle regioni esterne, ~1.07× in deep zoom (regione del benchmark).
 
 ## Pipeline (asincrona, latest-wins)
 - Thread worker (daemon) + `threading.Condition` + **slot job singolo**: i request in coda
@@ -109,11 +155,12 @@ da questo registro.
   **All'avvio il programma parte sempre SENZA file corrente** (v5.1.1: `view_file`
   non viene più ripristinato dalla config) → "Salva zona" chiede sempre il nome finché
   l'utente non carica/salva esplicitamente una zona in quella sessione.
-- **Config**: `~\mandelbrot\config.json` con
-  `precision, palette, backend, bench` (la **vista** `cx, cy, half, mi, mi_auto` e
-  `view_file` non sono più persistite: v5.1.1/v5.1.2, eventuali vecchi valori in
-  config esistenti sono ignorati); salvata all'uscita e **throttled ~1 s** sui
-  cambiamenti; reset riporta i default.
+- **Config**: `~/mandelbrot/config.json` con
+  `precision, palette, backend, bench` — `backend` ∈ {`"cpu"`, `"gpu"`} (v5.4.0; un
+  vecchio valore `"cuda"` è mappato su `"gpu"` alla lettura) — (la **vista** `cx, cy,
+  half, mi, mi_auto` e `view_file` non sono più persistite: v5.1.1/v5.1.2, eventuali
+  vecchi valori in config esistenti sono ignorati); salvata all'uscita e **throttled
+  ~1 s** sui cambiamenti; reset riporta i default.
 - **Avvio (v5.1.2)**: il programma parte SEMPRE con la configurazione di default —
   vista sull'intero insieme di Mandelbrot (`cx=-0.5, cy=0, half=1.5`) + MI auto —
   come la prima volta; la vista precedente si recupera solo con "Carica zona…".
@@ -127,9 +174,9 @@ da questo registro.
   benchmark comparabile anche se la formula auto cambia.
 - Parametri in `config.json` (chiave `bench`, overridibile; una vecchia `bench.mi` è ignorata).
 - Esegue nella **modalità corrente** dell'app (v5.1.0, prima era sempre CUDA f32):
-  motore CPU/CUDA + precisione f32/f64 come selezionati in toolbar; su CUDA usa un
-  buffer proprio (no contesa col render normale). Per confrontare versioni,
-  usarlo nella stessa modalità.
+  motore CPU/GPU + precisione f32/f64 come selezionati in toolbar; su CUDA usa un
+  buffer proprio (no contesa col render normale), Metal usa il proprio buffer di
+  output, CPU la memoria numpy. Per confrontare versioni, usarlo nella stessa modalità.
 - Report: dialog con **rendering/s in grande** (il vero risultato, ~42pt verde), statistiche
   (n. rendering, ms/render) e griglia dei parametri; errore → "BENCHMARK FALLITO" + dettaglio.
 
@@ -142,24 +189,60 @@ da questo registro.
 - **CuPy 14**: `cp.cuda.MemoryHost` e `Event.elapsed_time` non esistono più → memoria
   host pinned con `cp.cuda.PinnedMemory(size)` (+`.ptr`) e `cp.cuda.runtime.memcpy(dst,
   src, n, kind)`; timing con `perf_counter`+sync.
+- **Metal / pyobjc (v5.4.0, scoperti a caro prezzo)**:
+  - gli argomenti **scalarmi** vanno in uno `struct` passato via buffer
+    `[[buffer(1)]]` (né scalari nudi né `[[buffer]]` su singoli `float` sono accettati
+    in MSL);
+  - MSL usa `fmin/fmax/pow/sqrt/log2/log` (senza suffisso `f`) e `half` è un tipo
+    riservato → il campo dello struct si chiama `hs`, non `half`;
+  - i puntatori richiedono l'address space esplicito (`device`/`constant`);
+  - H2D/D2H: `buf.contents().as_buffer(N)` restituisce una **memoryview scrivibile**
+    (C-level, ~0.01 ms) — è il ponte rapido (la varlist NON è bytes-like);
+  - `setBuffer:offset:atIndex:` ha firma `(buffer, **offset**, **INDEX**)` →
+    `(pbuf, 0, 1)`, non `(pbuf, 1, 0)`;
+  - su Apple Silicon **`double` non è supportato** → il kernel è f32-only;
+  - il compute è sincrono (`commit` + `waitUntilCompleted` + read); un `threading.Lock`
+    serializza le chiamate; 2 run sono **bit-identici** (deterministico).
 - **FMA numpy (scoperta v5.0.0, critica per la bit-identità)**: `np.square` su array
   complessi è compilato da numpy 2.4 **con FMA** (`re*re - im*im` contratto in
   `fma(re, re, -(im*im))`, dipende dal build SIMD), mentre Numba senza fastmath NON
   contrae: 1 ULP di differenza su orbite caotiche → escape time diverso su una
-  piccolissima frazione di pixel di bordo (0.01–0.8% a seconda dello zoom). Regola:
-  in tutto il codice CPU il quadrato complesso va fatto in parti esplicite
-  (`a*a-b*b`, `2*a*b` con ufunc singoli) → percorso Numba e fallback numpy restano
-  bit-identici tra loro. Gate v5.2.0: GPU f32/f64 e CPU **bit-identici** ai loro
-  riferimenti `baseline/*.npy`; CPU e GPUf64 devono rendere la **stessa immagine**
-  (≤2% di pixel con max diff per canale > 8 — solo bordo caotico + 1-2 ULP di
-  `log2`/`log` libm-vs-CUDA). (v5.0.0: il gate CPU era bit-id vs `*_cpu.npy` +
-  continuità ≤1.5% vs `*_cpu_v4151.npy` — riferimenti storici rimossi in v5.2.1,
-  recuperabili dalla storia git.)
+   piccolissima frazione di pixel di bordo (0.01–0.8% a seconda dello zoom). Regola:
+   in tutto il codice CPU il quadrato complesso va fatto in parti esplicite
+   (`a*a-b*b`, `2*a*b` con ufunc singoli) → in **f64** il percorso Numba e il
+   fallback numpy restano bit-identici tra loro. **Eccezione f32 (v5.3.0)**: in f32
+   Numba/LLVM contrae in FMA / riassocia in modo *dipendente dal contesto del
+   loop* (intrinseco, non riproducibile in modo affidabile con numpy) → Numba-f32
+   e numpy-f32 differiscono di 1-qualche ULP su una piccolissima frazione di pixel
+   di bordo caotico (`it[]` sempre uguale; al più 1 entry di LUT). Per questo il
+    self-test f32 usa `it[]` esatto + `mag[]` entro tolleranza, e il gate confronta
+    la CPU-f32 col *suo* riferimento (entrambi Numba → bit-identici). Gate v5.4.0
+    (portatile per piattaforma): CPU f64/f32 **bit-identiche** ai riferimenti
+    (`<zona>_cpu.npy` = f64, `<zona>_cpu_f32.npy` = f32); **se CUDA**: CUDA f32/f64
+    bit-id a `<zona>_gpu_f32/_gpu_f64.npy` + CPUf64~CUDAf64 ≤2% pixel >8 (bordo
+    caotico + ULP libm-vs-CUDA); **se Metal**: Metal f32 bit-id a
+    `<zona>_metal_f32.npy` + determinismo (2 run bit-identici) + Metal~CPUf32 entro la
+    varianza f32 intrinseca, stimata `max(2%, 1.5× CPUf32~CUDAf32)` usando il gold
+    CUDA f32 come righello della "nube" f32 — a deep-zoom le implementazioni f32
+    (Numba/CUDA/Metal) divergono tra loro per il 10-25% dei pixel di bordo caotico per
+    FMA/contrazione: NON è un difetto (Metal f32 è all'altezza di CUDA f32 e CPU f32).
+    (v5.0.0: il gate CPU era bit-id vs `*_cpu.npy` + continuità ≤1.5% vs
+    `*_cpu_v4151.npy` — riferimenti storici rimossi in v5.2.1, recuperabili dalla
+    storia git.)
+- **Associatività IEEE (bit-identità)**: riscrivere un'espressione numpy può
+  cambiare gli arrotondamenti — `cx + half*X/s` NON è bit-identico a
+  `cx + half*(X/s)` (l'ordine di `*` e `/` conta). Per restare bit-identici
+  conservare l'ordine originale delle operazioni e verificare con il gate
+  multi-zona (poteva passare in una zona e rompersi in un'altra).
 - **Modello di memoria Numba (scoperta v5.0.0)**: dentro `prange` la lettura di una
   memoria scritta da un altro thread **non è affidabile**: Numba/LLVM fa hoisting del
   load fuori dal loop (semantica single-thread), quindi un bump cross-thread non è
   visto e il lavoro viene comunque eseguito (verificato sperimentalmente). La
   cancellazione cooperativa va fatta a livello Python (tra bande/segmenti), non
   dentro il kernel.
+  Altri vincoli Numba: `break`/`continue` nel corpo di `prange` impediscono la
+  parallelizzazione; `cache=True` NON è usato (mandel.py cambia nome di modulo a ogni
+  load → cache inutilizzabile, la compilazione è pagata dal warmup thread all'avvio);
+  nessun ufunc `fma` disponibile in Numba.
 - Tkinter: `delete`/`insert` su `Entry` disabilitato sono **no-op** → prima `state="normal"`.
-- Note operative (PowerShell su UNC, tool, workflow di versionamento): vedi **AGENTS.md**.
+- Note operative (versionamento, ambiente GPU condiviso, benchmarking): vedi **AGENTS.md**.

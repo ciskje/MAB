@@ -6,10 +6,17 @@
 #        (default: mandel.py nella stessa cartella dello script)
 # Output: nel repo:  baseline.txt  +  baseline/<zona>_<backend>.npy
 #
-# Misure (960x540, mediana di 3 run dopo 1 warmup, palette fuoco, mi=auto_mi):
-#   GPU : kernel (perf_counter+sync; CuPy 14 non ha Event.elapsed_time) |
-#         D2H (out.get) | PIL fromarray | totale compute_gpu
-#   CPU : totale compute_cpu | costo allocazioni+prefiltro (stimato)
+# Misure (960x540, mediana di 3 run dopo warmup, palette fuoco, mi=auto_mi):
+#   CUDA f32/f64 (se disponibile): kernel (perf_counter+sync) | D2H (out.get) |
+#         PIL | totale; riferimenti <zona>_gpu_f32.npy (gold f32) e
+#         <zona>_gpu_f64.npy
+#   METAL f32 (Apple GPU, se disponibile; v5.4.0): totale; riferimento
+#         <zona>_metal_f32.npy (deterministico)
+#   CPU f64/f32: totale compute_cpu | costo allocazioni+prefiltro (stimato);
+#         riferimenti <zona>_cpu.npy (=f64) e <zona>_cpu_f32.npy
+#
+# Portatile: usa solo i backend disponibili (CUDA e/o Metal); su una macchina
+# senza CUDA genera i ref Metal (o, se anche Metal e' assente, solo CPU).
 import importlib.util
 import os
 import sys
@@ -109,18 +116,23 @@ def main():
 
     cp = None
     gpu_name = "n/d"
-    if m._GPU:
+    cuda_ok = (m._CUDA_OK and m._KERNEL_F32 is not None)
+    metal_ok = (m._METAL_OK and m._METAL_BE is not None)
+    if cuda_ok:
         import cupy
         cp = cupy
         gpu_name = cp.cuda.runtime.getDeviceProperties(0)["name"].decode()
+    elif metal_ok:
+        gpu_name = "Metal (Apple GPU)"
+    backend_desc = "CUDA" if cuda_ok else ("Metal" if metal_ok else "nessuna GPU")
 
     from PIL import Image
 
     L = []
     ap = L.append
     ap("BASELINE mandel v%s — %s" % (m.VERSION, time.strftime("%Y-%m-%d %H:%M:%S")))
-    ap("GPU: %s | cupy %s | numpy %s | python %s" % (
-        gpu_name, getattr(cp, "__version__", "n/d"), np.__version__, sys.version.split()[0]))
+    ap("Backend: %s | GPU: %s | cupy %s | numpy %s | python %s" % (
+        backend_desc, gpu_name, getattr(cp, "__version__", "n/d"), np.__version__, sys.version.split()[0]))
     ap("Risoluzione: %dx%d | run: mediana di %d (1 warmup) | palette: fuoco | mi = auto_mi(half)" % (W, H, N))
     ap("")
 
@@ -128,43 +140,70 @@ def main():
         mi = m.auto_mi(half)
         ap("=== %s  c=(%.16g, %.16gi)  half=%.6g  mi=%d" % (zname, cx, cy, half, mi))
 
-        # --- GPU f32 / f64 ---
-        for prec in ("f32", "f64"):
-            kern = (m._KERNEL_F64 if prec == "f64" else m._KERNEL_F32)
-            if kern is None or cp is None:
-                ap("  GPU %-3s: NON DISPONIBILE" % prec)
-                continue
-            gpu_split(m, cp, cx, cy, half, mi, prec)  # warmup (module load, alloc)
-            tk, td, tt, tp = [], [], [], []  # NB: 4 liste distinte (non lo stesso oggetto!)
-            host = None
-            for _ in range(N):
-                host, a, b = gpu_split(m, cp, cx, cy, half, mi, prec)
-                tk.append(a); td.append(b)
-                t0 = time.perf_counter()
-                img = m.compute_gpu(cx, cy, half, W, H, mi, prec=prec)
-                tt.append((time.perf_counter() - t0) * 1000.0)  # ms
-                arr = np.asarray(img).reshape(H, W, 3)
-                t0 = time.perf_counter()
-                Image.fromarray(arr)
-                tp.append((time.perf_counter() - t0) * 1000.0)  # ms
-            np.save(os.path.join(refdir, "%s_gpu_%s.npy" % (zname, prec)),
-                    np.asarray(img).reshape(H, W, 3))
-            ap("  GPU %-3s: kernel %8.2f ms | D2H %7.2f ms | PIL %5.2f ms | totale %8.2f ms  (~%.1f render/s)"
-               % (prec, med(tk), med(td), med(tp), med(tt), 1000.0 / med(tt)))
+        # --- GPU f32 / f64 (CUDA, se disponibile; gold f32/f64) ---
+        if cuda_ok:
+            for prec in ("f32", "f64"):
+                kern = (m._KERNEL_F64 if prec == "f64" else m._KERNEL_F32)
+                if kern is None or cp is None:
+                    ap("  CUDA %-3s: NON DISPONIBILE" % prec)
+                    continue
+                gpu_split(m, cp, cx, cy, half, mi, prec)  # warmup (module load, alloc)
+                tk, td, tt, tp = [], [], [], []  # NB: 4 liste distinte (non lo stesso oggetto!)
+                host = None
+                for _ in range(N):
+                    host, a, b = gpu_split(m, cp, cx, cy, half, mi, prec)
+                    tk.append(a); td.append(b)
+                    t0 = time.perf_counter()
+                    img = m.compute_gpu(cx, cy, half, W, H, mi, prec=prec)
+                    tt.append((time.perf_counter() - t0) * 1000.0)  # ms
+                    arr = np.asarray(img).reshape(H, W, 3)
+                    t0 = time.perf_counter()
+                    Image.fromarray(arr)
+                    tp.append((time.perf_counter() - t0) * 1000.0)  # ms
+                np.save(os.path.join(refdir, "%s_gpu_%s.npy" % (zname, prec)),
+                        np.asarray(img).reshape(H, W, 3))
+                ap("  CUDA %-3s: kernel %8.2f ms | D2H %7.2f ms | PIL %5.2f ms | totale %8.2f ms  (~%.1f render/s)"
+                   % (prec, med(tk), med(td), med(tp), med(tt), 1000.0 / med(tt)))
+        else:
+            ap("  CUDA : NON DISPONIBILE (nessun cupy/GPU CUDA)")
 
-        # --- CPU ---
-        m.compute_cpu(cx, cy, half, W, H, mi)  # warmup
-        tcpu = []
-        img = None
-        for _ in range(N):
-            t0 = time.perf_counter()
-            img = m.compute_cpu(cx, cy, half, W, H, mi)
-            tcpu.append((time.perf_counter() - t0) * 1000.0)  # ms
+        # --- GPU f32 (Metal, Apple GPU, se disponibile; v5.4.0) ---
+        if metal_ok:
+            # burst di warmup per scalare il clock GPU (dopo run CPU lunghi il
+            # primo compute Metal e' 10-15x piu' lento del valore a regime).
+            for _ in range(8):
+                m.compute_gpu(cx, cy, half, W, H, mi, prec="f32")
+            tt, tp = [], []
+            img = None
+            for _ in range(N):
+                t0 = time.perf_counter()
+                img = m.compute_gpu(cx, cy, half, W, H, mi, prec="f32")
+                tt.append((time.perf_counter() - t0) * 1000.0)  # ms
+                Image.fromarray(np.asarray(img).reshape(H, W, 3))
+            np.save(os.path.join(refdir, "%s_metal_f32.npy" % zname),
+                    np.asarray(img).reshape(H, W, 3))
+            ap("  METAL f32: totale %8.2f ms  (~%.1f render/s)" % (med(tt), 1000.0 / med(tt)))
+        else:
+            ap("  METAL : NON DISPONIBILE (non Apple GPU / pyobjc assente)")
+
+        # --- CPU f64 / f32 (v5.3.0) ---
         alloc = cpu_alloc_cost(cx, cy, half)
-        np.save(os.path.join(refdir, "%s_cpu.npy" % zname),
-                np.asarray(img).reshape(H, W, 3))
-        ap("  CPU   : totale %8.2f ms | allocazioni+prefiltro ~%6.2f ms  (~%.2f render/s)"
-           % (med(tcpu), alloc, 1000.0 / med(tcpu)))
+        for prec in ("f64", "f32"):
+            m.compute_cpu(cx, cy, half, W, H, mi, prec=prec)  # warmup
+            tcpu = []
+            img = None
+            for _ in range(N):
+                t0 = time.perf_counter()
+                img = m.compute_cpu(cx, cy, half, W, H, mi, prec=prec)
+                tcpu.append((time.perf_counter() - t0) * 1000.0)  # ms
+            # <zona>_cpu.npy resta = f64 (riferimenti pre-esistenti validi);
+            # la nuova via f32 ha il proprio riferimento <zona>_cpu_f32.npy.
+            fname = ("%s_cpu.npy" if prec == "f64" else "%s_cpu_f32.npy") % zname
+            np.save(os.path.join(refdir, fname),
+                    np.asarray(img).reshape(H, W, 3))
+            extra = " | allocazioni+prefiltro ~%6.2f ms" % alloc if prec == "f64" else ""
+            ap("  CPU %-3s: totale %8.2f ms%s  (~%.2f render/s)"
+               % (prec, med(tcpu), extra, 1000.0 / med(tcpu)))
         ap("")
 
     ap("Reference frame salvati in: %s" % refdir)

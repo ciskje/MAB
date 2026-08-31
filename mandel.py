@@ -1,11 +1,62 @@
 # ============================================================================
 # Insieme di Mandelbrot - visualizzatore interattivo
-# VERSIONE: 5.2.1
+# VERSIONE: 5.4.0
 # ----------------------------------------------------------------------------
 # REGOLA: ogni modifica incrementa la versione e aggiunge una voce qui sotto
 # (formato: versione - data - descrizione modifiche).
 #
 # STORICO:
+# 5.4.0 - 2026-08-31
+#   - NUOVO BACKEND GPU METAL (Apple Silicon): lo slot "GPU" e' ORA generico
+#     (Motore CPU/GPU, config "cpu"/"gpu"). Su questa Mac GPU=Metal, su una
+#     NVIDIA GPU=CUDA. Rilevamento: preferisco CUDA (ha f64) se presente,
+#     altrimenti Metal (pyobjc+Metal). Metal su Apple Silicon NON supporta
+#     'double' -> il backend Metal e' f32-ONLY; f64 resta solo sulla CPU (Numba).
+#     Con Metal attivo il bottone f64 e' disabilitato (come CUDA senza kernel
+#     f64); tornando a CPU f32/f64 sono di nuovo selezionabili (stato dinamico).
+#   - Kernel MSL: stesso criterio di escape, interior analitico e coloring
+#     (smooth iteration) di CUDA e CPU (v5.2.0) -> stesse immagini a parte 1-
+#     qualche ULP di FMA/contrazione sul bordo caotico (limitazione intrinseca
+#     di f32, NON un difetto: Metal f32 all'altezza di CUDA f32 e CPU f32).
+#     Parametri (cx,cy,half,w,h,mi,pal) in uno struct via buffer [[buffer(1)]];
+#     output [[buffer(0)]]. 1 px/thread, threadgroup 16x16 (256). Deterministico
+#     (2 run bit-identici). H2D/D2H via buf.contents().as_buffer(N) (memoryview
+#     scrivibile, C-level). compute_gpu e' ORA un dispatcher (CUDA/Metal);
+#     backend() mostra "Metal f32"/"CUDA f32|f64"/"CPU f32|f64".
+#   - Baseline: + riferimenti baseline/<zona>_metal_f32.npy (Metal, deterministico)
+#     + misura Metal; i <zona>_gpu_*.npy (CUDA, storici) restano il gold f32 per
+#     il cross-check del gate.
+#   - Gate: portatile per piattaforma. Sempre CPU f64/f32 bit-id ai riferimenti.
+#     GPU=CUDA: come prima (GPU f32/f64 bit-id a <zona>_gpu_*.npy, CPUf64~GPUf64
+#     <=2%). GPU=Metal (no CUDA): Metal f32 bit-id a <zona>_metal_f32.npy +
+#     determinismo (2 run) + cross-check Metal f32 ~ gold CUDA f32 entro la
+#     varianza intrinseca di f32 (<=max(2%, 1.5 x CPUf32~CUDAf32)).
+# 5.3.0 - 2026-08-31
+#   - CPU f32: il toggle "precisione f32/f64" vale ORA anche per il motore CPU
+#     (prima la CPU era SEMPRE f64/complex128). Workspace CPU per dtype
+ #     (f32/f64, key (w,h,prec)); il kernel Numba si auto-specializza su
+ #     complex64 (stesso codice); il fallback numpy usa la stessa sequenza di
+ #     ufunc in parti esplicite (no FMA) anche in f32; self-test Numba-vs-numpy
+ #     PER PRECISIONE (f64: bit-identita'; f32: it[] esatto + mag[] entro
+ #     tolleranza — in f32 Numba/LLVM contrae in FMA/riassocia in modo
+ #     dipendente dal contesto del loop, non riproducibile in modo affidabile
+ #     con numpy) + warmup/compilazione di ENTRAMBE le precisioni all'avvio
+ #     (flag di ok per precisione: se una delle due non passa resta il fallback
+ #     solo per quella). backend() mostra "CPU f32"/"CPU f64"; UI: i bottoni
+ #     f32/f64 sono abilitati anche in CPU (la guardia _KERNEL_F64 is None vale
+ #     solo per CUDA). Il percorso CPU f64 resta bit-identico (gate); la CPU f32
+ #     e' bit-identica al SUO riferimento (entrambi Numba).
+#   - Baseline: nuovi riferimenti baseline/<zona>_cpu_f32.npy + misura CPU f32;
+#     i <zona>_cpu.npy restano = CPU f64 (nessun rename).
+#   - Gate: + check CPU f32 bit-identica ai riferimenti <zona>_cpu_f32.npy;
+#     gli altri check sono invariati (GPU f32/f64 bit-id, CPU f64 bit-id,
+#     CPU f64 ~ GPU f64 <=2%).
+#   - Nota (misurata in Fase 0, 960x540 auto_mi): f32 NON accelera il loop di
+#     escape (catena dipendente seriale, latency-bound: scalare f32 ~ scalare
+#     f64, in z3 leggermente piu' lento: 0.84-0.96x); il guadagno e' solo sui
+#     passi memory-bound (geometria/prefiltro/coloring): ~1.6-1.7x sulle
+#     regioni esterne (z1/z2), ~1.07x in deep zoom (z3, regione del benchmark
+#     integrato). Mantenuto come opzione dell'utente.
 # 5.2.1 - 2026-08-30
 #   - Cleanup: rimossi i riferimenti storici baseline/*_cpu_v4151.npy (3 file,
 #     non piu' usati dal gate da v5.2.0; recuperabili dalla storia git).
@@ -299,6 +350,7 @@ import os
 import json
 import time
 import ctypes
+import struct
 import numpy as np
 from PIL import Image, ImageTk
 
@@ -334,7 +386,7 @@ CONFIG_PATH = os.path.join(os.path.expanduser("~"), "mandelbrot", "config.json")
 BENCH = dict(cx=-0.7499302568795561, cy=-0.015139113925433963, half=5.226737155905588e-05,
              w=960, h=540, secs=8.0)
 
-VERSION = "5.2.1"
+VERSION = "5.4.0"
 
 # ---------------- Palette (LUT 256x3 condivisa CPU/GPU) ----------------
 _FIRE = (
@@ -502,7 +554,7 @@ def _build_kernel(prec):
         src = src.replace("@@" + k + "@@", v)
     return src, d["KNAME"]
 
-_GPU = False
+_CUDA_OK = False
 _KERNEL_F32 = None
 _KERNEL_F64 = None
 _BUF = None
@@ -511,20 +563,196 @@ try:
     if cp.cuda.is_available():
         _src, _name = _build_kernel("f32")
         _KERNEL_F32 = cp.RawKernel(_src, _name, options=("--use_fast_math",))
-        _GPU = True
+        _CUDA_OK = True
         try:
             _src, _name = _build_kernel("f64")
             _KERNEL_F64 = cp.RawKernel(_src, _name, options=("--use_fast_math",))
         except Exception:
             _KERNEL_F64 = None
 except Exception:
-    _GPU = False
+    _CUDA_OK = False
+
+# ---------------- GPU (Metal, Apple Silicon) ----------------
+# Backend Metal per Apple GPU (M1...). Metal su Apple Silicon NON supporta
+# 'double' -> il backend Metal e' f32-ONLY (f64 resta solo sulla CPU, Numba).
+# Stesso criterio di escape, interior analitico e coloring (smooth iteration)
+# del kernel CUDA e del percorso CPU (v5.2.0): le tre vie producono lo stesso
+# colore, a parte 1-qualche ULP di FMA/contrazione sul bordo caotico (limitazione
+# intrinseca di f32, NON un difetto: Metal f32 e' all'altezza di CUDA f32 e CPU f32).
+# Vincoli pyobjc (scoperti a caro prezzo):
+#   - gli argomenti scalari vanno in uno struct passato via buffer [[buffer(1)]]
+#     (ne' scalari nudi ne' [[buffer]] su singoli float sono accettati);
+#   - MSL usa fmin/fmax/pow/sqrt/log2/log (senza suffisso 'f') e 'half' e'
+#     riservata (quindi il campo si chiama 'hs');
+#   - i puntatori richiedono l'address space esplicito (device/constant);
+#   - H2D/D2H: buf.contents().as_buffer(N) restituisce una memoryview scrivibile
+#     (C-level, ~0.01 ms) -> e' il ponte rapido (la varlist NON e' bytes-like);
+#   - setBuffer:offset:atIndex: ha firma (buffer, offset, INDEX) -> (pbuf, 0, 1).
+def _build_metal_msl():
+    names = list(PALETTES)
+    consts = "\n".join(
+        "constant unsigned char LUT_%s[768] = { %s };"
+        % (n.upper(), _fmt_lut(make_lut(pal))) for n, pal in PALETTES.items())
+    select = "    constant unsigned char* lut = LUT_%s;" % names[0].upper()
+    for i, n in enumerate(names[1:], start=1):
+        select += "\n    if (p.pal == %d) lut = LUT_%s;" % (i, n.upper())
+    return r'''
+#include <metal_stdlib>
+using namespace metal;
+
+@@CONSTS@@
+
+struct Params {
+    float cx;
+    float cy;
+    float hs;
+    int w;
+    int h;
+    int mi;
+    int pal;
+};
+
+kernel void mandel(
+    device unsigned char* out [[buffer(0)]],
+    constant Params& p [[buffer(1)]],
+    uint2 pos [[thread_position_in_grid]])
+{
+    int col = (int)pos.x;
+    int row = (int)pos.y;
+    if (col >= p.w || row >= p.h) return;
+
+@@SELECT@@
+
+    float cx = p.cx, cy = p.cy, hs = p.hs;
+    int w = p.w, h = p.h, mi = p.mi;
+
+    float x0 = cx + hs * ((float)(2 * col - w) / (float)w);
+    float y0 = cy + hs * ((float)h / (float)w) * ((float)(2 * row - h) / (float)h);
+
+    device unsigned char* pp = out + (size_t)(row * w + col) * 3;
+
+    // Interior analitico: bulbo periodica-2 + cardioide principale (stesso criterio CUDA/CPU)
+    if (x0 >= -2.0f && x0 <= 0.4f && y0 >= -1.3f && y0 <= 1.3f) {
+        float d2 = (x0 + 1.0f) * (x0 + 1.0f) + y0 * y0;
+        if (d2 <= 0.0625f) { pp[0] = 0; pp[1] = 0; pp[2] = 0; return; }
+        float A = 1.0f - 4.0f * x0;
+        float B = -4.0f * y0;
+        float R = sqrt(A * A + B * B);
+        if (R < 2.0f * sqrt(0.5f * (R + A))) { pp[0] = 0; pp[1] = 0; pp[2] = 0; return; }
+    }
+
+    float a = cx * cx + (x0 - cx);
+    float two_cx = 2.0f * cx;
+    float wr = -cx, wi = 0.0f;
+    int it = 0;
+    bool esc = false;
+    float mag2 = 0.0f;
+    for (int i = 0; i < mi; ++i) {
+        if (esc) break;
+        float nr = wr * wr - wi * wi + two_cx * wr + a;
+        float ni = two_cx * wi + 2.0f * wr * wi + y0;
+        wr = nr; wi = ni;
+        float zr = wr + cx;
+        mag2 = zr * zr + wi * wi;
+        if (mag2 > 4.0f) { esc = true; it = i; }
+    }
+    if (!esc) { pp[0] = 0; pp[1] = 0; pp[2] = 0; return; }
+
+    float nu = (float)it + 1.0f - log2(0.5f * log(mag2));
+    float t = pow(fmin(1.0f, fmax(0.0f, nu / (float)mi)), 0.35f);
+    int idx = (int)(fmin(1.0f, fmax(0.0f, t)) * 255.0f);
+    pp[0] = lut[idx * 3 + 0];
+    pp[1] = lut[idx * 3 + 1];
+    pp[2] = lut[idx * 3 + 2];
+}
+'''.replace("@@CONSTS@@", consts).replace("@@SELECT@@", select)
+
+
+class MetalBackend:
+    """Backend Metal (Apple GPU) f32, deterministico (2 run bit-identici).
+    I parametri (cx, cy, half, w, h, mi, pal) vanno in uno struct passato via
+    buffer [[buffer(1)]]; l'output e' un buffer [[buffer(0)]]. H2D/D2H via
+    buf.contents().as_buffer(N) (memoryview scrivibile, C-level). Un lock
+    serializza le chiamate (il compute e' sincrono: commit+waitUntilCompleted+read).
+    """
+    TH = 16  # threads per threadgroup (16x16 = 256, sotto il max 1024 di M1)
+
+    def __init__(self):
+        import Metal
+        self._Metal = Metal
+        self.dev = Metal.MTLCreateSystemDefaultDevice()
+        if self.dev is None:
+            raise RuntimeError("nessun dispositivo Metal")
+        self.q = self.dev.newCommandQueue()
+        src = _build_metal_msl()
+        self.lib, err = self.dev.newLibraryWithSource_options_error_(src, None, None)
+        if self.lib is None:
+            raise RuntimeError("compilazione MSL fallita: %s" % err)
+        fn = self.lib.newFunctionWithName_('mandel')
+        self.ps, err = self.dev.newComputePipelineStateWithFunction_error_(fn, None)
+        if self.ps is None:
+            raise RuntimeError("pipeline Metal fallita: %s" % err)
+        self._out = None
+        self._pbuf = self.dev.newBufferWithLength_options_(
+            28, Metal.MTLResourceStorageModeShared)
+        self._lock = threading.Lock()
+
+    def _out_buf(self, need):
+        if self._out is None or self._out.length() < need:
+            self._out = self.dev.newBufferWithLength_options_(
+                need, self._Metal.MTLResourceStorageModeShared)
+        return self._out
+
+    def compute(self, cx, cy, half, w, h, mi, pal=0):
+        M = self._Metal
+        need = w * h * 3
+        with self._lock:
+            out = self._out_buf(need)
+            payload = struct.pack('<fffiiii', cx, cy, half, w, h, mi, pal)
+            self._pbuf.contents().as_buffer(len(payload))[:] = payload
+            gx = (w + self.TH - 1) // self.TH
+            gy = (h + self.TH - 1) // self.TH
+            cmd = self.q.commandBuffer()
+            enc = cmd.computeCommandEncoder()
+            enc.setComputePipelineState_(self.ps)
+            enc.setBuffer_offset_atIndex_(out, 0, 0)         # buffer[0] = out
+            enc.setBuffer_offset_atIndex_(self._pbuf, 0, 1)   # buffer[1] = params (offset=0, INDEX=1)
+            enc.dispatchThreadgroups_threadsPerThreadgroup_(
+                M.MTLSizeMake(gx, gy, 1), M.MTLSizeMake(self.TH, self.TH, 1))
+            enc.endEncoding()
+            cmd.commit()
+            cmd.waitUntilCompleted()
+            mv = out.contents().as_buffer(need)
+            return np.frombuffer(mv, dtype=np.uint8, count=need).reshape(h, w, 3).copy()
+
+
+_METAL_OK = False
+_METAL_BE = None
+try:
+    import Metal  # pyobjc: disponibile su macOS con i framework di sistema
+    if Metal.MTLCreateSystemDefaultDevice() is not None:
+        _METAL_BE = MetalBackend()
+        _METAL_OK = True
+except Exception:
+    _METAL_OK = False
+    _METAL_BE = None
+
+# Slot GPU generico: preferisco CUDA (ha f64) se presente, altrimenti Metal.
+# _GPU = lo slot GPU e' disponibile (CUDA o Metal).
+_GPU_BACKEND = "cuda" if _CUDA_OK else ("metal" if _METAL_OK else None)
+_GPU = _GPU_BACKEND is not None
+
+def _gpu_supports_f64():
+    # f64 solo su CUDA con kernel f64 compilato; Metal e' f32-only (no 'double').
+    return _GPU_BACKEND == "cuda" and _KERNEL_F64 is not None
 
 _PREC = "f32"
 
 def set_prec(p):
     global _PREC
-    if p == "f64" and _KERNEL_F64 is None:
+    # v5.4.0: la guardia f64 vale per lo slot GPU corrente (Metal e' f32-only;
+    # CUDA senza kernel f64). La CPU supporta sempre sia f32 sia f64.
+    if p == "f64" and _USE_GPU and not _gpu_supports_f64():
         return False
     if p in ("f32", "f64"):
         _PREC = p
@@ -553,7 +781,7 @@ def _pinned_view(w, h):
         _PINNED[key] = ent
     return ent
 
-def compute_gpu(cx, cy, half, w, h, mi, buf=None, prec=None):
+def _compute_gpu_cuda(cx, cy, half, w, h, mi, buf=None, prec=None):
     global _BUF
     need = w * h * 3
     if buf is None:
@@ -587,6 +815,20 @@ def compute_gpu(cx, cy, half, w, h, mi, buf=None, prec=None):
     except Exception:
         return Image.fromarray(out.get().reshape((h, w, 3)))
 
+def _compute_gpu_metal(cx, cy, half, w, h, mi, prec=None):
+    # Metal e' f32-only (Apple Silicon non supporta 'double').
+    if prec == "f64":
+        raise ValueError("Metal: solo f32 ('double' non supportato su Apple Silicon)")
+    rgb = _METAL_BE.compute(cx, cy, half, w, h, mi, pal=list(PALETTES).index(_PALETTE))
+    return Image.fromarray(rgb)
+
+def compute_gpu(cx, cy, half, w, h, mi, buf=None, prec=None):
+    # v5.4.0: dispatcher dello slot GPU generico (CUDA o Metal). 'buf' e'
+    # usato solo dal percorso CUDA (Metal usa il proprio buffer di output).
+    if _GPU_BACKEND == "metal":
+        return _compute_gpu_metal(cx, cy, half, w, h, mi, prec=prec)
+    return _compute_gpu_cuda(cx, cy, half, w, h, mi, buf=buf, prec=prec)
+
 # ---------------- CPU (fallback) ----------------
 
 # v4.16.0: array di lavoro CPU cacheati per (w,h) (nessuna allocazione per
@@ -602,7 +844,10 @@ def compute_gpu(cx, cy, half, w, h, mi, buf=None, prec=None):
 # memoria cross-thread dentro prange, verificato sperimentalmente).
 # Se il job diventa obsoleto, le bande rimanenti vengono saltate e il frame
 # e' comunque scartato dal worker (doppia garanzia).
-_NUMBA_OK = False
+# v5.3.0: flag di ok PER PRECISIONE (f32 e f64 si auto-specializzano in kernel
+# Numba distinti; se il self-test di bit-identita' NON passa per una
+# precisione, il fallback numpy resta attivo solo per quella).
+_NUMBA_OK = {"f64": False, "f32": False}
 _GEN = np.zeros(1, dtype=np.int32)
 try:
     from numba import njit, prange
@@ -642,99 +887,141 @@ except Exception:
     njit = None
     prange = None
 
-def _numba_warmup():
-    """Compila il kernel in background all'avvio e fa un self-test di
-    bit-identita' contro il loop numpy di riferimento; se la bit-identita'
-    non tiene (o la compilazione fallisce) resta il fallback numpy.
+def _numba_selftest(cdt):
+    """Self-test del kernel Numba contro il loop numpy di riferimento (4x4 con
+    casi limite: interiori, fuga rapida/lenta, pre-diverged, overflow), STESSA
+    formula. Criterio per precisione:
+      f64: it[] e mag[] BIT-IDENTICI (Numba f64 e numpy f64 usano la stessa
+           aritmetica a 3 arrotondamenti — verificato).
+      f32: it[] (decisioni di fuga) ESATTAMENTE uguali; mag[] entro una
+           toller stretta. In f32 Numba/LLVM applica contrazioni FMA e
+           riassociazioni che DIPENDONO DAL CONTESTO del loop (verificato:
+           z_re^2-z_im^2 resta a 3 arrotondamenti, mentre 2*z_re*z_im+ci e
+           z_re^2+z_im^2 vengono contratti in FMA) -> la bit-identita' con
+           numpy non e' riproducibile in modo affidabile. La differenza e' di
+           1-qualche ULP su una piccolissima frazione di pixel di bordo
+           caotico (irrelevante: al piu' 1 entry di LUT nel coloring).
     """
-    global _NUMBA_OK
+    fdt = np.float32 if cdt is np.complex64 else np.float64
+    c = np.array([
+        -0.5 + 0.5j, 0.7 + 0.1j, -1.7 + 0j, 0.3 + 0.6j,
+        -0.1 - 0.9j, 2.5j, 0.0, 1.0,
+        -0.749 - 0.001j, 0.1 - 0.7j, -1.2 - 0.5j, 0.9 + 0.9j,
+        -0.28 + 0.01j, -2.0j, 0.5 - 1.9j, -0.75 + 0.12j,
+    ], dtype=cdt).reshape(4, 4)
+    d = np.zeros((4, 4), dtype=bool)
+    d[0, 0] = True  # pre-diverged (come il prefiltro interior)
+    it_numba = np.zeros((4, 4), dtype=np.int32)
+    mag_numba = np.zeros((4, 4), dtype=fdt)
+    _mandel_escape(c, d, it_numba, mag_numba, 64, 0, 4)
+    # riferimento numpy (stessa formula del fallback in compute_cpu)
+    zr = np.zeros((4, 4), dtype=fdt)
+    zi = np.zeros((4, 4), dtype=fdt)
+    cr = c.real
+    ci = c.imag
+    div = d.copy()
+    it_ref = np.zeros((4, 4), dtype=np.int32)
+    mag_ref = np.zeros((4, 4), dtype=fdt)
+    with np.errstate(over="ignore", invalid="ignore"):
+        for i in range(64):
+            if not (~div).any():
+                break
+            zr2 = zr * zr - zi * zi
+            zi2 = 2.0 * zr * zi
+            zr = zr2 + cr
+            zi = zi2 + ci
+            m = ((zr * zr + zi * zi) > 4.0) & ~div
+            if not m.any():
+                continue
+            div |= m
+            it_ref[m] = i
+            mag_ref[m] = zr[m] * zr[m] + zi[m] * zi[m]
+    # it[] (decisioni di fuga) DEVE coincidere SEMPRE, per entrambe le precisioni
+    if not np.array_equal(it_numba, it_ref):
+        return False
+    if cdt is np.complex64:
+        # f32: mag[] entro tolleranza stretta (differenze FMA/riassociazione
+        # di Numba, ~1-qualche ULP). Cattura errori grossolani (formula errata)
+        # tollerando il rumore di arrotondamento.
+        esc = (it_numba > 0) & (it_ref > 0)
+        if not esc.any():
+            return True
+        a = mag_numba[esc].astype(np.float64)
+        b = mag_ref[esc].astype(np.float64)
+        rel = np.abs(a - b) / np.maximum(b, 1.0)
+        return bool((rel <= 1e-2).all())
+    # f64: bit-identita' stretta
+    return bool(np.array_equal(mag_numba, mag_ref))
+
+def _numba_warmup():
+    """Compila in background all'avvio i kernel di ENTRAMBE le precisioni
+    (f64 e f32; il kernel Numba si auto-specializza sul dtype in ingresso) e
+    fa il self-test contro il loop numpy di riferimento, una precisione per
+    volta (f64: bit-identita'; f32: it[] esatto + mag[] entro tolleranza —
+    vedi _numba_selftest); se il test non passa (o la compilazione fallisce)
+    resta il fallback numpy per quella precisione.
+    """
     if njit is None:
         return
-    try:
-        # self-test: 4x4 con casi limite (interiori, fuga rapida/lenta,
-        # pre-diverged, overflow) — il risultato DEVE essere bit-identico
-        # al loop numpy di compute_cpu.
-        c = np.array([
-            -0.5 + 0.5j, 0.7 + 0.1j, -1.7 + 0j, 0.3 + 0.6j,
-            -0.1 - 0.9j, 2.5j, 0.0, 1.0,
-            -0.749 - 0.001j, 0.1 - 0.7j, -1.2 - 0.5j, 0.9 + 0.9j,
-            -0.28 + 0.01j, -2.0j, 0.5 - 1.9j, -0.75 + 0.12j,
-        ], dtype=np.complex128).reshape(4, 4)
-        d = np.zeros((4, 4), dtype=bool)
-        d[0, 0] = True  # pre-diverged (come il prefiltro interior)
-        it_numba = np.zeros((4, 4), dtype=np.int32)
-        mag_numba = np.zeros((4, 4))
-        _mandel_escape(c, d, it_numba, mag_numba, 64, 0, 4)
-        # riferimento numpy con la STESSA aritmetica del fallback in
-        # compute_cpu (parti esplicite, no FMA) — il risultato DEVE essere
-        # bit-identico al kernel Numba.
-        zr = np.zeros((4, 4))
-        zi = np.zeros((4, 4))
-        cr = c.real
-        ci = c.imag
-        div = d.copy()
-        it_ref = np.zeros((4, 4), dtype=np.int32)
-        mag_ref = np.zeros((4, 4))
-        with np.errstate(over="ignore", invalid="ignore"):
-            for i in range(64):
-                if not (~div).any():
-                    break
-                zr2 = zr * zr - zi * zi
-                zi2 = 2.0 * zr * zi
-                zr = zr2 + cr
-                zi = zi2 + ci
-                m = ((zr * zr + zi * zi) > 4.0) & ~div
-                if not m.any():
-                    continue
-                div |= m
-                it_ref[m] = i
-                mag_ref[m] = zr[m] * zr[m] + zi[m] * zi[m]
-        if not (np.array_equal(it_numba, it_ref) and np.array_equal(mag_numba, mag_ref)):
-            return  # bit-identita' violata: resta il fallback numpy
-        # warmup: compila il percorso parallelo a dimensioni realistiche
-        c2 = np.zeros((64, 64), dtype=np.complex128)
-        d2 = np.zeros((64, 64), dtype=bool)
-        it2 = np.zeros((64, 64), dtype=np.int32)
-        mag2 = np.zeros((64, 64))
-        _mandel_escape(c2, d2, it2, mag2, 32, 0, 64)
-        _NUMBA_OK = True
-    except Exception:
-        pass
+    for prec, cdt in (("f64", np.complex128), ("f32", np.complex64)):
+        fdt = np.float32 if cdt is np.complex64 else np.float64
+        try:
+            if not _numba_selftest(cdt):
+                continue  # self-test violato: fallback numpy per questa precisione
+            # warmup: compila il percorso parallelo a dimensioni realistiche
+            c2 = np.zeros((64, 64), dtype=cdt)
+            d2 = np.zeros((64, 64), dtype=bool)
+            it2 = np.zeros((64, 64), dtype=np.int32)
+            mag2 = np.zeros((64, 64), dtype=fdt)
+            _mandel_escape(c2, d2, it2, mag2, 32, 0, 64)
+            _NUMBA_OK[prec] = True
+        except Exception:
+            pass
 
 _CPU_WS = {}
 
-def _cpu_ws(w, h):
-    key = (w, h)
+def _cpu_ws(w, h, prec):
+    # v5.3.0: workspace per PRECISIONE (dtype f32/f64). X/Y restano float64 in
+    # entrambi i casi: la griglia e' esatta e il prodotto con half viene
+    # calcolato in f64 poi arrotondato al dtype di destinazione (no double
+    # rounding).
+    fdt = np.float32 if prec == "f32" else np.float64
+    cdt = np.complex64 if prec == "f32" else np.complex128
+    key = (w, h, prec)
     ws = _CPU_WS.get(key)
     if ws is None:
         ws = {
             "X": np.arange(w) - w / 2,
             "Y": np.arange(h) - h / 2,
-            "tx": np.empty(w),
-            "ty": np.empty(h),
-            "real": np.empty((h, w)),
-            "imag": np.empty((h, w)),
-            "c": np.empty((h, w), dtype=np.complex128),
-            "w4": np.empty((h, w), dtype=np.complex128),
+            "tx": np.empty(w, dtype=fdt),
+            "ty": np.empty(h, dtype=fdt),
+            "real": np.empty((h, w), dtype=fdt),
+            "imag": np.empty((h, w), dtype=fdt),
+            "c": np.empty((h, w), dtype=cdt),
+            "w4": np.empty((h, w), dtype=cdt),
             # v5.0.0: z in parti reali/immaginarie (NO np.square: quel ufunc e'
             # compilato da numpy con FMA -> bit diversi dal percorso Numba).
-            "zr": np.empty((h, w)),
-            "zi": np.empty((h, w)),
-            "tr": np.empty((h, w)),
-            "ti": np.empty((h, w)),
+            "zr": np.empty((h, w), dtype=fdt),
+            "zi": np.empty((h, w), dtype=fdt),
+            "tr": np.empty((h, w), dtype=fdt),
+            "ti": np.empty((h, w), dtype=fdt),
             "diverged": np.empty((h, w), dtype=bool),
             "it": np.empty((h, w), dtype=np.int32),
             # v5.2.0: |z|^2 al momento della fuga (coloring smooth, come la GPU);
             # 0 = mai fuggito (interiore).
-            "mag": np.empty((h, w)),
+            "mag": np.empty((h, w), dtype=fdt),
         }
-        if len(_CPU_WS) >= 3:
+        if len(_CPU_WS) >= 6:
             _CPU_WS.pop(next(iter(_CPU_WS)))
         _CPU_WS[key] = ws
     return ws
 
-def compute_cpu(cx, cy, half, w, h, mi, my_gen=0):
-    ws = _cpu_ws(w, h)
+def compute_cpu(cx, cy, half, w, h, mi, my_gen=0, prec="f64"):
+    # v5.3.0: prec = "f32"/"f64" (default f64). Tutti gli array di lavoro sono
+    # del dtype corrispondente; il percorso f64 resta bit-identico al
+    # precedente (stesse operazioni, stesso ordine, stesso dtype).
+    ws = _cpu_ws(w, h, prec)
+    fdt = np.float32 if prec == "f32" else np.float64
     real, imag = ws["real"], ws["imag"]
     # Ordine delle operazioni IDENTICO al codice originale (bit-identita'
     # garantita): xs = cx + (half*X)/(w/2); ys = cy + ((half*h/w)*Y)/(h/2).
@@ -767,9 +1054,10 @@ def compute_cpu(cx, cy, half, w, h, mi, my_gen=0):
     w4 += 1.0
     diverged |= (np.abs(w4) < 2.0 * np.sqrt(0.5 * (np.abs(w4) + np.real(w4))))
     diverged |= (np.abs(c + 1.0) <= 0.25)
-    if _NUMBA_OK:
+    if _NUMBA_OK.get(prec):
         # v5.0.0: escape loop parallelo Numba (bit-identico, verificato a
-        # runtime dal self-test di _numba_warmup).
+        # runtime dal self-test di _numba_warmup; v5.3.0: il kernel si
+        # auto-specializza sul dtype in ingresso, f64 e f32).
         # Cancellazione cooperativa a livello PYTHON (affidabile): le righe
         # sono divise in 16 bande e il contatore di generazione viene
         # controllato tra una banda e l'altra. In-kernel non e' affidabile:
@@ -783,11 +1071,15 @@ def compute_cpu(cx, cy, half, w, h, mi, my_gen=0):
             _mandel_escape(c, diverged, it, mag, mi, b0, min(b0 + band, h))
     else:
         # Fallback numpy (e riferimento del gate di correttezza).
-        # v5.0.0: quadrato complesso in parti esplicite (a*a-b*b, 2*a*b con
-        # ufunc singoli, NO FMA) = bit-identico al kernel Numba. NB: np.square
-        # su complessi e' compilato da numpy con FMA (re*re - im*im contratto
-        # in fma) e darebbe bit diversi (1 ULP su orbite caotiche -> escape
-        # time diverso su una piccolissima frazione di pixel di bordo).
+        # v5.0.0: quadrato complesso in parti esplicite (a*a-b*b, 2*a*b),
+        # MAI np.square (quel ufunc e' compilato da numpy con FMA -> bit
+        # diversi).
+        # v5.3.0: il fallback e' la stessa formula in f32 e f64 (ufunc
+        # dtype-agnostic). In f32 NON e' bit-identico al kernel Numba
+        # (contrazioni FMA/riassociazioni di Numba/LLVM dipendenti dal
+        # contesto del loop) -> differenza di 1-qualche ULP su una piccolissima
+        # frazione di pixel di bordo caotico; il self-test lo tollera (it[]
+        # esatto, mag[] entro 1e-2 relativo). E' usato solo se Numba e' assente.
         cr = c.real
         ci = c.imag
         tr = ws["tr"]
@@ -822,8 +1114,8 @@ def compute_cpu(cx, cy, half, w, h, mi, my_gen=0):
     # -> al massimo 1 entry di LUT di differenza vs GPU f64 (documentato
     # nel gate: check CPU-vs-GPUf64 con bound piccolo).
     esc = mag > 0.0
-    nu = np.zeros((h, w))
-    nu[esc] = it[esc].astype(np.float64) + 1.0 - np.log2(0.5 * np.log(mag[esc]))
+    nu = np.zeros((h, w), dtype=fdt)
+    nu[esc] = it[esc].astype(fdt) + 1.0 - np.log2(0.5 * np.log(mag[esc]))
     t = np.power(np.clip(nu / mi, 0.0, 1.0), 0.35).ravel()
     idx = (t * 255).astype(np.uint8)
     rgb = _LUT[idx].reshape((h, w, 3)).copy()
@@ -834,14 +1126,18 @@ def compute_cpu(cx, cy, half, w, h, mi, my_gen=0):
 _USE_GPU = _GPU
 
 def backend():
-    if _USE_GPU:
-        return "CUDA " + _PREC
-    return "CPU f64"
+    # v5.4.0: la precisione (f32/f64) e' comune ai due motori; lo slot GPU e'
+    # generico (CUDA o Metal). Metal e' f32-only.
+    if not _USE_GPU:
+        return "CPU " + _PREC
+    name = "Metal" if _GPU_BACKEND == "metal" else "CUDA"
+    return name + " " + _PREC
 
 def compute(cx, cy, half, w, h, mi, buf=None, prec=None, my_gen=0):
     if _USE_GPU:
         return compute_gpu(cx, cy, half, w, h, mi, buf=buf, prec=prec)
-    return compute_cpu(cx, cy, half, w, h, mi, my_gen=my_gen)
+    # v5.3.0: la precisione selezionata (f32/f64) vale anche per la CPU.
+    return compute_cpu(cx, cy, half, w, h, mi, my_gen=my_gen, prec=prec or _PREC)
 
 # v4.16.0: warmup GPU in background all'avvio: init context CUDA, module load
 # e prime allocazioni (buffer device + pinned) pagati FUORI dal primo render
@@ -849,7 +1145,7 @@ def compute(cx, cy, half, w, h, mi, buf=None, prec=None, my_gen=0):
 def _gpu_warmup():
     try:
         compute_gpu(CX0, CY0, HALF0, 64, 64, 64, prec="f32")
-        if _KERNEL_F64 is not None:
+        if _gpu_supports_f64():
             compute_gpu(CX0, CY0, HALF0, 64, 64, 64, prec="f64")
     except Exception:
         pass
@@ -901,12 +1197,13 @@ class MandelbrotApp:
         tk.Label(bk, text="Motore:").pack(side="left")
         self.cpu_btn = tk.Checkbutton(bk, text="CPU", command=lambda: self.set_backend("cpu"))
         self.cpu_btn.pack(side="left", padx=2, pady=3)
-        self.cuda_btn = tk.Checkbutton(bk, text="CUDA", command=lambda: self.set_backend("cuda"))
-        self.cuda_btn.pack(side="left", padx=2, pady=3)
+        # v5.4.0: lo slot GPU e' generico (CUDA o Metal, rilevato all'avvio).
+        self.gpu_btn = tk.Checkbutton(bk, text="GPU", command=lambda: self.set_backend("gpu"))
+        self.gpu_btn.pack(side="left", padx=2, pady=3)
         if _GPU:
-            self.cuda_btn.select()
+            self.gpu_btn.select()
         else:
-            self.cuda_btn.config(state="disabled")
+            self.gpu_btn.config(state="disabled")
             self.cpu_btn.select()
         pl = tk.Frame(self.ctl)
         pl.pack(side="left", padx=12)
@@ -927,11 +1224,10 @@ class MandelbrotApp:
         self.f64_btn = tk.Checkbutton(pc, text="f64", command=lambda: self.set_precision("f64"))
         self.f64_btn.pack(side="left", padx=2, pady=3)
         self.f32_btn.select()
-        if not _GPU:
-            self.f32_btn.config(state="disabled")
-            self.f64_btn.config(state="disabled")
-        elif _KERNEL_F64 is None:
-            self.f64_btn.config(state="disabled")
+        # v5.4.0: la disponibilita' di f64 dipende dallo slot GPU corrente
+        # (Metal e' f32-only; CUDA senza kernel f64). Stato dinamico: si
+        # aggiorna a ogni cambio di motore (vedi _sync_precision_buttons).
+        self._sync_precision_buttons()
         mif = tk.Frame(self.ctl)
         mif.pack(side="left", padx=12)
         tk.Label(mif, text="Iter:").pack(side="left")
@@ -1008,23 +1304,35 @@ class MandelbrotApp:
 
     def _select_backend(self, be):
         global _USE_GPU
-        if be == "cuda" and not _GPU:
+        # v5.4.0: lo slot GPU e' generico ("gpu" = CUDA o Metal, rilevato all'avvio).
+        if be == "gpu" and not _GPU:
             return False
-        _USE_GPU = (be == "cuda")
+        _USE_GPU = (be == "gpu")
         self.cpu_btn.deselect()
-        self.cuda_btn.deselect()
-        (self.cpu_btn if be == "cpu" else self.cuda_btn).select()
+        self.gpu_btn.deselect()
+        (self.cpu_btn if be == "cpu" else self.gpu_btn).select()
         return True
 
     def _select_precision(self, p):
-        if p == "f64" and _KERNEL_F64 is None:
-            return False
         if not set_prec(p):
             return False
         self.f32_btn.deselect()
         self.f64_btn.deselect()
         (self.f32_btn if p == "f32" else self.f64_btn).select()
         return True
+
+    def _sync_precision_buttons(self):
+        # v5.4.0: la disponibilita' di f64 dipende dallo slot GPU corrente:
+        # Metal e' f32-only, CUDA senza kernel f64 non fa f64. Con CPU f32/f64
+        # sono sempre selezionabili. Se la precisione corrente non e' piu'
+        # disponibile si torna a f32; il bottone selezionato riflette _PREC.
+        f64_ok = (not _USE_GPU) or _gpu_supports_f64()
+        if not f64_ok and _PREC == "f64":
+            set_prec("f32")
+        self.f64_btn.config(state="normal" if f64_ok else "disabled")
+        self.f32_btn.deselect()
+        self.f64_btn.deselect()
+        (self.f32_btn if _PREC == "f32" else self.f64_btn).select()
 
     def _update_mi_label(self):
         self.mi_caption.config(text="Iterazioni (auto):" if self.mi_auto else "Iterazioni:")
@@ -1141,6 +1449,7 @@ class MandelbrotApp:
     def set_backend(self, b):
         if not self._select_backend(b):
             return
+        self._sync_precision_buttons()
         self._refresh_title()
         self.request_render("motore: " + b.upper())
 
@@ -1162,8 +1471,9 @@ class MandelbrotApp:
         self.mi_minus.config(state="disabled")
         self.mi_plus.config(state="disabled")
         self._select_palette("fuoco")
-        self._select_backend("cuda" if _GPU else "cpu")
+        self._select_backend("gpu" if _GPU else "cpu")
         self._select_precision("f32")
+        self._sync_precision_buttons()
         self._refresh_title()
         self._cfg_dirty = True
         self._update_mi_label()
@@ -1344,8 +1654,9 @@ class MandelbrotApp:
         # MI auto); la vista si salva solo col file zona ('Salva zona').
         # NB: view_file NON e' persistito (v5.1.1): 'Salva zona' chiede sempre
         # il nome finche' non si carica/salva una zona in quella sessione.
+        # v5.4.0: lo slot GPU e' generico -> salvo "gpu"/"cpu" (non piu' "cuda").
         c = dict(precision=_PREC, palette=_PALETTE,
-                 backend=("cuda" if _USE_GPU else "cpu"),
+                 backend=("gpu" if _USE_GPU else "cpu"),
                  bench=dict(self.bench))
         try:
             d = os.path.dirname(CONFIG_PATH)
@@ -1371,12 +1682,18 @@ class MandelbrotApp:
         # v5.1.1: view_file non viene ripristinato: 'Salva zona' chiede sempre
         # il nome finche' non si carica/salva una zona in questa sessione.
         self._load_bench(c.get("bench"))
-        self._select_precision(c.get("precision", "f32"))
         self._select_palette(c.get("palette", "fuoco"))
-        be = c.get("backend", "cuda" if _GPU else "cpu")
-        if be == "cuda" and not _GPU:
+        # v5.4.0: "cuda" (config v<=5.3.0) e' mappato su "gpu".
+        be = c.get("backend", "gpu" if _GPU else "cpu")
+        if be == "cuda":
+            be = "gpu"
+        if be == "gpu" and not _GPU:
             be = "cpu"
         self._select_backend(be)
+        # la precisione va DOPO il motore: la disponibilita' di f64 dipende
+        # dallo slot GPU corrente (set_prec la rifiuta se lo slot non la fa).
+        self._select_precision(c.get("precision", "f32"))
+        self._sync_precision_buttons()
         self._refresh_title()
         self._update_mi_label()
         return True
@@ -1532,7 +1849,9 @@ class MandelbrotApp:
         mi = auto_mi(b["half"])
         need = b["w"] * b["h"] * 3
         bench_buf = None
-        if _USE_GPU:
+        # v5.4.0: il buffer di lavoro serve solo al percorso CUDA (Metal usa
+        # il proprio buffer, CPU la memoria numpy).
+        if _GPU_BACKEND == "cuda":
             try:
                 import cupy as cp
                 bench_buf = cp.empty((need,), dtype=cp.uint8)

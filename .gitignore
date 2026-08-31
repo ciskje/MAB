@@ -9,6 +9,9 @@ __pycache__/
 # Zone salvate dal tool ("Salva zona", nome di default con timestamp)
 mandelbrot_*.json
 
+# Config dell'app (stato utente; salvata all'uscita / throttled sui cambiamenti)
+config.json
+
 # File di prova non pertinenti al progetto
 hello.py
 hello_world.py
