@@ -188,6 +188,41 @@ da questo registro.
 - Report: dialog con **rendering/s in grande** (il vero risultato, ~42pt verde), statistiche
   (n. rendering, ms/render) e griglia dei parametri; errore → "BENCHMARK FALLITO" + dettaglio.
 
+## Build dell'app (multipiattaforma)
+- **one-dir self-contained**, senza dipendenze di Python/librerie per l'utente:
+  la CPU è sempre disponibile (Numba/numpy bundled); la GPU richiede solo che
+  l'utente abbia driver + runtime (NVIDIA su Windows, Apple Silicon su macOS):
+  - **Windows** → `dist/Mandelbrot/Mandelbrot.exe` + `_internal/` + zip
+    `dist/Mandelbrot-v<ver>-win64.zip`. GPU CuPy incluso ma **runtime CUDA NON
+    bundled**: la GPU funziona solo se l'utente installa driver NVIDIA + runtime
+    CUDA (toolkit o pacchetti pip `nvidia/*`), che CuPy trova a runtime via
+    cuda-pathfinder da `CUDA_PATH`/PATH/Program Files; senza CUDA l'app degrada
+    automaticamente su CPU.
+  - **macOS** → `dist/Mandelbrot.app` (GPU Metal/pyobjc, firma ad-hoc).
+- **Script**: `build_app.py` (unico script, ramificato su `sys.platform`:
+  icona → PyInstaller → post). `build_app.sh` lo redirect (compatibilità); su
+  Windows si usa `build_app.ps1` (o `python build_app.py`).
+- **Ricetta**: `mandelbrot.spec` (PyInstaller), multipiattaforma:
+  - comune: `collect_all(numba/llvmlite)` (dylib/dll di llvmlite + dati JIT),
+    `PIL._tkinter_finder`, esclude `torch/matplotlib/IPython/pytest`;
+  - **win32**: `collect_all(cupy)` (solo moduli, **NO DLL CUDA**: il runtime
+    NVIDIA non è bundle, l'utente lo installa e CuPy lo trova via
+    cuda-pathfinder), icona `mandelbrot.ico`, versione EXE (versioninfo),
+    runtime hook `hook_dlldir.py` (`os.add_dll_directory` su cartella EXE +
+    `_internal`, difensivo);
+  - **darwin**: `collect_all(objc/Foundation/Metal)` + submoduli, `libomp.dylib`
+    da `torch/lib` (il rpath di `omppool` è hardcoded a una dir CI inesistente),
+    `BUNDLE` → `.app` (icon `.icns`, bundle_id, plist).
+- **Icona**: `make_icon.py` renderizza 1024×1024 con l'app (CPU f64, palette
+  'termal') → `icon_src.png` (per il `.icns` su macOS via sips/iconutil) +
+  `mandelbrot.ico` multi-size 16–256 (Pillow).
+- **Versione unica di verità**: `VERSIONE` nell'header di `mandel.py`; la spec
+  PyInstaller la legge da lì (consistente tra titolo EXE, plist del `.app` e
+  `VERSION` del sorgente).
+- **Ordine** (obbligatorio, vedi AGENTS.md): modifica sorgente → `build_app.py`
+  → verifica → commit. `dist/`, `build/`, icone ed EXE sono gitignorati (l'app
+  NON va committata, ma va rigenerata prima del commit per lasciarla aggiornata).
+
 ## Note tecniche (imparati a caro prezzo)
 - Le LUT **devono** essere `__constant__` **incorporate nel kernel** (una per palette):
   passate come buffer device, CuPy le sovrascriveva con l'output a ogni launch.

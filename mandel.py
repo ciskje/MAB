@@ -1,11 +1,31 @@
 # ============================================================================
 # Insieme di Mandelbrot - visualizzatore interattivo
-# VERSIONE: 5.4.5
+# VERSIONE: 5.5.0
 # ----------------------------------------------------------------------------
 # REGOLA: ogni modifica incrementa la versione e aggiunge una voce qui sotto
 # (formato: versione - data - descrizione modifiche).
 #
 # STORICO:
+# 5.5.0 - 2026-09-01
+#   - Build dell'app multipiattaforma: aggiunta la build Windows (one-dir)
+#     dist/Mandelbrot/Mandelbrot.exe con GPU CUDA (CuPy) incluso ma runtime
+#     CUDA NON bundled: la GPU funziona solo se l'utente installa driver
+#     NVIDIA + runtime CUDA (che CuPy trova via cuda-pathfinder da CUDA_PATH/
+#     PATH/Program Files); la CPU (Numba/numpy) e' sempre disponibile.
+#     Self-contained senza dipendenze di Python/librerie.
+#     La build macOS (Mandelbrot.app, GPU Metal) resta invariata.
+#     - build_app.py: script di build unificato (icona -> PyInstaller -> post),
+#       ramificato su sys.platform; build_app.sh ora lo redirect; nuovo
+#       build_app.ps1 per Windows.
+#     - mandelbrot.spec: riscritto multipiattaforma (rami darwin/win32).
+#       win32: collect_all(cupy) (solo moduli, NO DLL CUDA), icona
+#       mandelbrot.ico, versione EXE (versioninfo), runtime hook hook_dlldir.py
+#       (os.add_dll_directory su EXE + _internal, difensivo); darwin: invariato
+#       (pyobjc/Metal, libomp da torch, BUNDLE .app, firma ad-hoc).
+#     - make_icon.py: oltre a icon_src.png genera mandelbrot.ico (multi-size
+#       16..256) via Pillow; palette dell'icona invariata ('termal').
+#     - spec.md/AGENTS.md: sezione 'Build dell'app' aggiornata per entrambe
+#       le piattaforme.
 # 5.4.5 - 2026-08-31
 #   - Icona app: ripristinata la palette 'termal' (la 5.4.4 l'aveva portata a
 #     'fuoco'; su richiesta torna 'termal'). make_icon.py usa di nuovo
@@ -427,7 +447,7 @@ CONFIG_PATH = os.path.join(os.path.expanduser("~"), "mandelbrot", "config.json")
 BENCH = dict(cx=-0.7499302568795561, cy=-0.015139113925433963, half=5.226737155905588e-05,
              w=960, h=540, secs=8.0)
 
-VERSION = "5.4.5"
+VERSION = "5.5.0"
 
 # ---------------- Palette (LUT 256x3 condivisa CPU/GPU) ----------------
 _FIRE = (

@@ -5,19 +5,13 @@
   (CUDA/CuPy o Metal/pyobjc, slot "GPU" generico v5.4.0) + Numba);
   versione e STORICO nel commento iniziale del file (fonte di verità).
 - `spec.md` — specifica del programma; DEVE restare in sync col sorgente
-  (vedi regola di versionamento sotto).
-- `baseline.py` — tool da riga di comando: rigenera i frame di riferimento
-  `baseline/*.npy` + misure per stadio (scrive `baseline.txt`).
-  Uso: `python baseline.py [path/mandel.py]`.
-- `gate.py` — gate di correttezza permanente (criterio in `spec.md`, sezione "Note tecniche").
-  Uso: `python gate.py [path/mandel.py]`; exit 0 = PASS.
-- `baseline/*.npy` — frame di riferimento (3 zone × GPU f32/f64 + CPU f64
-  (`*_cpu.npy`) + CPU f32 (`*_cpu_f32.npy`, v5.3.0) + Metal f32
-  (`*_metal_f32.npy`, v5.4.0)); usati dal gate. I `<zona>_gpu_*.npy` (CUDA) restano
-  il gold f32/f64 e il righello della varianza f32 per il cross-check Metal.
-  (I riferimenti CPU v4.15.1 storici sono stati rimossi in v5.2.1,
-  recuperabili dalla storia git.) `baseline.txt` = ultimo report misure.
+   (vedi regola di versionamento sotto).
 - `mandelbrot_*.json` — zone salvate dall'app (dato utente, gitignorato).
+- `build_app.py` — script di build self-contained (one-dir) multipiattaforma
+  (icona → PyInstaller → post); `build_app.sh` lo redirect, `build_app.ps1` wrapper
+  Windows. `mandelbrot.spec` = ricetta PyInstaller multipiattaforma; `hook_dlldir.py`
+  = runtime hook Windows (percorso DLL per CuPy); `make_icon.py` = genera
+  `icon_src.png` + `mandelbrot.ico`.
 
 ## Versionamento sorgente (OBBLIGATORIO)
 Ogni modifica a `mandel.py` (o ad altri sorgenti Python del
@@ -34,13 +28,27 @@ progetto) DEVE:
 Il blocco è intitolato "Insieme di Mandelbrot - visualizzatore interattivo"
 e si trova in cima al file.
 
-## Build dell'app (OBBLIGATORIO prima di ogni commit)
-Prima di committare DEVE essere rigenerata l'app self-contained, così
-`dist/Mandelbrot.app` riflette esattamente il sorgente che viene committato.
-- Ordine: modifica sorgente → `./build_app.sh` → (verifica) → `git commit`.
-- Comando: `./build_app.sh` (icona → PyInstaller one-dir → fix libomp → firma ad-hoc).
-- `dist/`, `build/`, `mandelbrot.icns`, `icon_src.png` sono gitignorati: l'app NON va
-  committata, ma va SEMPRE rigenerata prima del commit per lasciarla aggiornata.
+## Build dell'app (multipiattaforma, OBBLIGATORIA prima di ogni commit)
+Prima di committare DEVE essere rigenerata l'app self-contained (one-dir), così
+l'artefatto riflette esattamente il sorgente committato:
+- **Windows** → `dist/Mandelbrot/Mandelbrot.exe` + `_internal/` (CPU sempre;
+  GPU CuPy incluso ma **runtime CUDA NON bundled**: la GPU funziona solo se
+  l'utente installa driver NVIDIA + runtime CUDA, che CuPy trova via
+  cuda-pathfinder da `CUDA_PATH`/PATH/Program Files) + zip
+  `dist/Mandelbrot-v<ver>-win64.zip`; **macOS** → `dist/Mandelbrot.app`
+  (GPU Metal/pyobjc, firma ad-hoc).
+- Ordine: modifica sorgente → **`python build_app.py`** → (verifica) → `git commit`.
+  (Su macOS anche `./build_app.sh`, ora redirect a `build_app.py`; su Windows
+  `.\build_app.ps1` oppure `python build_app.py`.)
+- File: `build_app.py` (unico script, ramificato su `sys.platform`: icona →
+  PyInstaller → post → zip su Windows) + `mandelbrot.spec` (ricetta
+  PyInstaller multipiattaforma) + `hook_dlldir.py` (runtime hook Windows:
+  `os.add_dll_directory` su cartella EXE + `_internal`, difensivo per le DLL
+  bundled) + `make_icon.py` (`icon_src.png` + `mandelbrot.ico`).
+- `dist/`, `build/`, `mandelbrot.icns`, `mandelbrot.ico`, `icon_src.png` sono
+  gitignorati: l'app NON va committata, ma va SEMPRE rigenerata prima del commit
+  per lasciarla aggiornata.
+- Dettaglio tecnico: sezione "Build dell'app (multipiattaforma)" di `spec.md`.
 
 ## Note operative
 - Gotchas di implementazione (bit-identità, numpy FMA, Numba, vincoli CuPy,
