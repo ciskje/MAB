@@ -1,11 +1,28 @@
 # ============================================================================
 # Insieme di Mandelbrot - visualizzatore interattivo
-# VERSIONE: 5.8.1
+# VERSIONE: 5.8.3
 # ----------------------------------------------------------------------------
 # REGOLA: ogni modifica incrementa la versione e aggiunge una voce qui sotto
 # (formato: versione - data - descrizione modifiche).
 #
 # STORICO:
+# 5.8.3 - 2026-09-02
+#   - Build: intermedie (build/, workpath) E output app (dist/, distpath)
+#     vanno ora sul DISCO DI SISTEMA (temp utente, via tempfile.gettempdir():
+#     mandelbrot_build / mandelbrot_dist) invece che nel progetto, che puo'
+#     stare su una share di rete dove la build e' lenta. Implementato in
+#     build_app.py (--workpath + --distpath). Sul progetto/NAS resta SOLO
+#     l'artefatto distributivo: su Windows la zip Mandelbrot-v<ver>-win64.zip,
+#     su macOS il .dmg Mandelbrot-v<ver>-macos.dmg (staging app + link
+#     /Applications in temp, hdiutil UDZO). Prima sia l'app (dist/Mandelbrot[.app])
+#     sia l'archivio finivano nel progetto.
+# 5.8.2 - 2026-09-02
+#   - UI: durante l'esecuzione del benchmark il cursore della finestra
+#     principale passa a 'watch' (sabbia/pallina = occupato) e torna alla
+#     freccia a terminazione. Prima, mentre il benchmark girava in un thread
+#     dedicato, il cursore restava 'arrow' e non segnava l'occupazione.
+#     Impostato in run_benchmark(), ripristinato in _bench_done() (unico punto
+#     di uscita, anche su errore).
 # 5.8.1 - 2026-09-02
 #   - Benchmark: nel grafico a barre il nome hardware NON compare piu'
 #     nell'etichetta della run corrente, che riporta ora solo il metodo attivo
@@ -517,7 +534,7 @@ BENCH_REF = (
     ("5070 Ti CUDA (storico)", 250.0),
 )
 
-VERSION = "5.8.1"
+VERSION = "5.8.3"
 
 # ---------------- Palette (LUT 256x3 condivisa CPU/GPU) ----------------
 _FIRE = (
@@ -2311,6 +2328,7 @@ class MandelbrotApp:
             self.status.config(text="benchmark annullato")
             return
         self._bench_running = True
+        self.root.config(cursor="watch")
         self.status.config(text=f"benchmark in corso ({self.bench['secs']:.0f} s)...")
         threading.Thread(target=self._bench_worker, daemon=True).start()
 
@@ -2349,6 +2367,7 @@ class MandelbrotApp:
 
     def _bench_done(self, count, secs, err):
         self._bench_running = False
+        self.root.config(cursor="")
         self.status.config(text="benchmark completato")
         self._bench_result_dialog(count, secs, err)
 

@@ -1,8 +1,8 @@
 #!/usr/bin/env python
 # Build self-contained (one-dir) multipiattaforma per l'app Mandelbrot.
 # Ordine: icona -> PyInstaller (mandelbrot.spec) -> post (verifica + zip).
-#   Windows: python build_app.py   -> dist/Mandelbrot/Mandelbrot.exe + zip
-#   macOS  : ./build_app.sh        -> dist/Mandelbrot.app (firma ad-hoc)
+#   Windows: python build_app.py   -> app su disco di sistema + zip nel progetto
+#   macOS  : python build_app.py   -> app su disco di sistema + .dmg nel progetto
 # Nota: il runtime CUDA NON e' incluso; la GPU CUDA funziona solo se l'utente ha
 # installato driver NVIDIA + runtime CUDA (trovati da cupy via cuda-pathfinder).
 # La GPU Vulkan (wgpu/wgpu-native, AMD/NVIDIA/Intel) E' invece bundled e funziona
@@ -12,10 +12,17 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 IS_WIN32 = (sys.platform == "win32")
 IS_DARWIN = (sys.platform == "darwin")
+# Workpath PyInstaller (build/) e output app (dist/) sul DISCO DI SISTEMA (temp
+# utente), NON nel progetto (che puo' stare su una share di rete, dove la build
+# e' lenta). Sul progetto/NAS resta SOLO lo zip (Windows).
+WORKDIR = os.path.join(tempfile.gettempdir(), "mandelbrot_build")
+DISTDIR = os.path.join(tempfile.gettempdir(), "mandelbrot_dist")
+DMGDIR = os.path.join(tempfile.gettempdir(), "mandelbrot_dmg")
 
 with open(os.path.join(HERE, "mandel.py"), encoding="utf-8") as _f:
     _head = _f.read(4096)
@@ -39,31 +46,55 @@ if r.returncode != 0:
 if not os.path.isfile(os.path.join(HERE, "mandelbrot.ico")):
     fail("mandelbrot.ico non generata")
 
-# 2) PyInstaller (ricetta mandelbrot.spec)
+# 2) PyInstaller (ricetta mandelbrot.spec) — workpath (build/) e distpath (app)
+#    su disco di sistema; l'app NON finisce sul NAS/progetto
+print("Workpath (build/):", WORKDIR, flush=True)
+print("Distpath (app):  ", DISTDIR, flush=True)
 r = run([sys.executable, "-m", "PyInstaller", "--noconfirm", "--clean",
+         "--workpath", WORKDIR, "--distpath", DISTDIR,
          os.path.join(HERE, "mandelbrot.spec")])
 if r.returncode != 0:
     fail("PyInstaller non riuscito")
 
 # 3) Post-build
 if IS_WIN32:
-    app_dir = os.path.join(HERE, "dist", "Mandelbrot")
+    app_dir = os.path.join(DISTDIR, "Mandelbrot")
     exe = os.path.join(app_dir, "Mandelbrot.exe")
     if not os.path.isfile(exe):
-        fail("dist/Mandelbrot/Mandelbrot.exe non trovata dopo la build")
-    base = os.path.join(HERE, "dist", "Mandelbrot-v%s-win64" % VERSION)
+        fail("app non trovata dopo la build (distpath=%s)" % DISTDIR)
+    # Zip sul progetto/NAS: l'app resta sul disco di sistema, sul NAS va solo lo zip
+    out_dir = os.path.join(HERE, "dist")
+    os.makedirs(out_dir, exist_ok=True)
+    base = os.path.join(out_dir, "Mandelbrot-v%s-win64" % VERSION)
     if os.path.exists(base + ".zip"):
         os.remove(base + ".zip")
     zip_path = shutil.make_archive(base, "zip",
-                                   root_dir=os.path.join(HERE, "dist"),
-                                   base_dir="Mandelbrot")
+                                   root_dir=DISTDIR, base_dir="Mandelbrot")
+    print("OK: app =", app_dir, "(disco di sistema)")
     print("OK: exe =", exe)
-    print("OK: zip =", zip_path)
+    print("OK: zip =", zip_path, "(progetto/NAS)")
 elif IS_DARWIN:
-    app = os.path.join(HERE, "dist", "Mandelbrot.app")
+    app = os.path.join(DISTDIR, "Mandelbrot.app")
     if not os.path.isdir(app):
-        fail("dist/Mandelbrot.app non trovato dopo la build")
+        fail("app non trovata dopo la build (distpath=%s)" % DISTDIR)
     run(["codesign", "--force", "--deep", "--sign", "-", app])
-    print("OK: app =", app)
+    # DMG: staging in temp (app + link /Applications per il drag-and-drop),
+    # poi .dmg sul progetto/NAS. L'app e le intermedie restano sul disco di sistema.
+    if os.path.isdir(DMGDIR):
+        shutil.rmtree(DMGDIR)
+    os.makedirs(DMGDIR)
+    shutil.copytree(app, os.path.join(DMGDIR, "Mandelbrot.app"), symlinks=True)
+    os.symlink("/Applications", os.path.join(DMGDIR, "Applications"))
+    out_dir = os.path.join(HERE, "dist")
+    os.makedirs(out_dir, exist_ok=True)
+    dmg_base = os.path.join(out_dir, "Mandelbrot-v%s-macos" % VERSION)
+    if os.path.exists(dmg_base + ".dmg"):
+        os.remove(dmg_base + ".dmg")
+    run(["hdiutil", "create", "-volname", "Mandelbrot", "-srcfolder", DMGDIR,
+         "-ov", "-format", "UDZO", dmg_base + ".dmg"])
+    if os.path.isdir(DMGDIR):
+        shutil.rmtree(DMGDIR)
+    print("OK: app =", app, "(disco di sistema)")
+    print("OK: dmg =", dmg_base + ".dmg", "(progetto/NAS)")
 else:
     fail("piattaforma non supportata per la build: %s" % sys.platform)

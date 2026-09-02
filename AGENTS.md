@@ -3,8 +3,9 @@
 ## Struttura del progetto
 - `mandel.py` — il programma (visualizzatore interattivo, Tkinter + 4 backend
   selezionabili: CPU (numpy/Numba), CUDA (CuPy), Metal (pyobjc), Vulkan (wgpu),
-  con fallback CPU); versione e STORICO nel commento iniziale del file
-  (fonte di verità).
+  con fallback CPU); versione in **due punti** che devono coincidere (header
+  `# VERSIONE:` per build + costante runtime `VERSION` per titolo/JSON) e
+  STORICO nel commento iniziale del file (fonte di verità).
 - `spec.md` — specifica del programma; DEVE restare in sync col sorgente
    (vedi regola di versionamento sotto).
 - `mandelbrot_*.json` — zone salvate dall'app (dato utente, gitignorato).
@@ -17,11 +18,16 @@
 ## Versionamento sorgente (OBBLIGATORIO)
 Ogni modifica a `mandel.py` (o ad altri sorgenti Python del
 progetto) DEVE:
-1. Incrementare la versione nel blocco di commento iniziale del sorgente
-    (`mandel.py`).
-    - bugfix = patch (x.y.Z), modifica minima (es. un dialog in piu, un testo,
-      un opzione) = patch (x.y.Z), modifica funzionale = minor (x.Y.0),
-      riscrittura/architettura = major (X.0.0)
+ 1. Incrementare la versione in `mandel.py` in **entrambi** i punti, che
+     DEVONO coincidere (se divergono, il titolo/JSON mostrano una versione
+     diversa da EXE/.app/zip):
+       - l'header `# VERSIONE: X.Y.Z` nel blocco di commento iniziale (è quello
+         che `mandelbrot.spec`/`build_app.py` leggono per EXE/.app/zip);
+       - la costante runtime `VERSION = "X.Y.Z"` (usata in titolo finestra +
+         JSON zona).
+     - bugfix = patch (x.y.Z), modifica minima (es. un dialog in piu, un testo,
+       un opzione) = patch (x.y.Z), modifica funzionale = minor (x.Y.0),
+       riscrittura/architettura = major (X.0.0)
 2. Aggiungere una voce allo STORICO nello stesso blocco, formato:
    `VERSIONE - AAAA-MM-GG - descrizione delle modifiche`.
 3. Aggiornare `spec.md` in modo che rispecchi il nuovo stato del programma
