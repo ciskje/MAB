@@ -10,10 +10,9 @@
    (vedi regola di versionamento sotto).
 - `mandelbrot_*.json` — zone salvate dall'app (dato utente, gitignorato).
 - `build_app.py` — script di build self-contained (one-dir) multipiattaforma
-  (icona → PyInstaller → post); `build_app.sh` lo redirect, `build_app.ps1` wrapper
-  Windows. `mandelbrot.spec` = ricetta PyInstaller multipiattaforma; `hook_dlldir.py`
-  = runtime hook Windows (percorso DLL per CuPy); `make_icon.py` = genera
-  `icon_src.png` + `mandelbrot.ico`.
+  (icona → PyInstaller → post). `mandelbrot.spec` = ricetta PyInstaller
+  multipiattaforma; `hook_dlldir.py` = runtime hook Windows (percorso DLL per CuPy);
+  `make_icon.py` = genera `icon_src.png` + `mandelbrot.ico` (+ `mandelbrot.icns` su macOS).
 
 ## Versionamento sorgente (OBBLIGATORIO)
 Ogni modifica a `mandel.py` (o ad altri sorgenti Python del
@@ -36,23 +35,23 @@ Il blocco è intitolato "Insieme di Mandelbrot - visualizzatore interattivo"
 e si trova in cima al file.
 
 ## Build dell'app (multipiattaforma, OBBLIGATORIA prima di ogni commit)
-Prima di committare DEVE essere rigenerata l'app self-contained (one-dir), così
-l'artefatto riflette esattamente il sorgente committato:
-- **Windows** → `dist/Mandelbrot/Mandelbrot.exe` + `_internal/` (CPU sempre;
-  GPU Vulkan (wgpu) bundled e subito disponibile; GPU CuPy incluso ma
-  **runtime CUDA NON bundled**: la GPU CUDA funziona solo se l'utente
-  installa driver NVIDIA + runtime CUDA, che CuPy trova via cuda-pathfinder da
-  `CUDA_PATH`/PATH/Program Files) + zip `dist/Mandelbrot-v<ver>-win64.zip`;
-  **macOS** → `dist/Mandelbrot.app` (GPU Metal/pyobjc + Vulkan/wgpu,
-  firma ad-hoc).
+Prima di committare DEVE essere rigenerata l'app self-contained (one-dir, con
+`python build_app.py` — solo su richiesta, non automatica), così l'artefatto
+riflette il sorgente. Intermedie (build/) e app one-dir vanno sul **disco di
+sistema** (temp utente); sul **progetto/NAS** resta solo l'artefatto distributivo:
+- **Windows** → app `Mandelbrot/Mandelbrot.exe` + `_internal/` su disco di sistema
+  (CPU sempre; GPU Vulkan (wgpu) bundled e subito disponibile; GPU CuPy incluso ma
+  **runtime CUDA NON bundled**: la GPU CUDA funziona solo se l'utente installa
+  driver NVIDIA + runtime CUDA, che CuPy trova via cuda-pathfinder da
+  `CUDA_PATH`/PATH/Program Files) + zip `dist/Mandelbrot-v<ver>-win64.zip` sul NAS;
+- **macOS** → app `Mandelbrot.app` su disco di sistema (GPU Metal/pyobjc +
+  Vulkan/wgpu, firma ad-hoc) + `.dmg` `dist/Mandelbrot-v<ver>-macos.dmg` sul NAS.
 - Ordine: modifica sorgente → **`python build_app.py`** → (verifica) → `git commit`.
-  (Su macOS anche `./build_app.sh`, ora redirect a `build_app.py`; su Windows
-  `.\build_app.ps1` oppure `python build_app.py`.)
 - File: `build_app.py` (unico script, ramificato su `sys.platform`: icona →
-  PyInstaller → post → zip su Windows) + `mandelbrot.spec` (ricetta
+  PyInstaller → post → zip su Windows / .dmg su macOS) + `mandelbrot.spec` (ricetta
   PyInstaller multipiattaforma) + `hook_dlldir.py` (runtime hook Windows:
   `os.add_dll_directory` su cartella EXE + `_internal`, difensivo per le DLL
-  bundled) + `make_icon.py` (`icon_src.png` + `mandelbrot.ico`).
+  bundled) + `make_icon.py` (`icon_src.png` + `mandelbrot.ico` + `mandelbrot.icns` su macOS).
 - `dist/`, `build/`, `mandelbrot.icns`, `mandelbrot.ico`, `icon_src.png` sono
   gitignorati: l'app NON va committata, ma va SEMPRE rigenerata prima del commit
   per lasciarla aggiornata.

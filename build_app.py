@@ -39,12 +39,14 @@ def fail(msg):
     sys.exit(1)
 
 
-# 1) Icona (icon_src.png + mandelbrot.ico) via motore CPU di mandel.py
+# 1) Icona (icon_src.png + mandelbrot.ico + mandelbrot.icns su macOS) via motore CPU di mandel.py
 r = run([sys.executable, os.path.join(HERE, "make_icon.py")])
 if r.returncode != 0:
     fail("make_icon.py non riuscita")
 if not os.path.isfile(os.path.join(HERE, "mandelbrot.ico")):
     fail("mandelbrot.ico non generata")
+if IS_DARWIN and not os.path.isfile(os.path.join(HERE, "mandelbrot.icns")):
+    fail("mandelbrot.icns non generata (serve sips su macOS)")
 
 # 2) PyInstaller (ricetta mandelbrot.spec) — workpath (build/) e distpath (app)
 #    su disco di sistema; l'app NON finisce sul NAS/progetto

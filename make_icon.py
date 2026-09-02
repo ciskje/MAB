@@ -1,4 +1,5 @@
-# Genera l'icona dell'app: icon_src.png (1024x1024) + mandelbrot.ico (multi-size).
+# Genera l'icona dell'app: icon_src.png (1024x1024) + mandelbrot.ico (multi-size)
+# + mandelbrot.icns (solo macOS, da icon_src.png via sips).
 # Usa il motore CPU di mandel.py (Numba o fallback numpy, bit-identico) - NO GPU,
 # NO display. Palette 'termal' (convenzione icona dell'app, vedi mandel.py/STORICO).
 import os
@@ -25,3 +26,10 @@ img.save(ico, sizes=[(16, 16), (24, 24), (32, 32), (48, 48),
                      (64, 64), (128, 128), (256, 256)])
 print("icona generata:", png)
 print("icona generata:", ico)
+
+# Icona macOS (solo darwin): mandelbrot.icns da icon_src.png via sips (tool nativo macOS)
+if sys.platform == "darwin":
+    import subprocess
+    icns = os.path.join(HERE, "mandelbrot.icns")
+    subprocess.run(["sips", "-s", "format", "icns", png, "--out", icns], check=True)
+    print("icona generata:", icns)

@@ -1,11 +1,18 @@
 # ============================================================================
 # Insieme di Mandelbrot - visualizzatore interattivo
-# VERSIONE: 5.8.3
+# VERSIONE: 5.8.4
 # ----------------------------------------------------------------------------
 # REGOLA: ogni modifica incrementa la versione e aggiunge una voce qui sotto
 # (formato: versione - data - descrizione modifiche).
 #
 # STORICO:
+# 5.8.4 - 2026-09-02
+#   - Build macOS: make_icon.py genera ora anche mandelbrot.icns (solo darwin) da
+#     icon_src.png via sips; build_app.py la verifica prima di PyInstaller. Prima
+#     l'icns NON veniva prodotto e la build .app falliva (mandelbrot.spec ha
+#     icon="mandelbrot.icns" nel BUNDLE). Allineati AGENTS.md/spec.md alla realta'
+#     (app su disco di sistema, zip win / dmg mac sul NAS, tolto riferimenti ai
+#     build_app.sh/.ps1 assenti).
 # 5.8.3 - 2026-09-02
 #   - Build: intermedie (build/, workpath) E output app (dist/, distpath)
 #     vanno ora sul DISCO DI SISTEMA (temp utente, via tempfile.gettempdir():
@@ -534,7 +541,7 @@ BENCH_REF = (
     ("5070 Ti CUDA (storico)", 250.0),
 )
 
-VERSION = "5.8.3"
+VERSION = "5.8.4"
 
 # ---------------- Palette (LUT 256x3 condivisa CPU/GPU) ----------------
 _FIRE = (

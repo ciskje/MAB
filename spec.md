@@ -290,8 +290,8 @@ block/workgroup/threadgroup 16×16, LUT incorporate come costanti (§12). Di seg
   su Windows la zip `dist/Mandelbrot-v<ver>-win64.zip` (generata da C:), su macOS il
   `dist/Mandelbrot-v<ver>-macos.dmg` (staging app + link `/Applications` in temp, `hdiutil UDZO`).
 - **Icona**: `make_icon.py` renderizza 1024×1024 con l'app (CPU f64, palette 'termal') →
-  `icon_src.png` (per il `.icns` su macOS via sips/iconutil) + `mandelbrot.ico` multi-size
-  16–256 (Pillow).
+  `icon_src.png` + `mandelbrot.ico` multi-size 16–256 (Pillow); su macOS genera anche
+  `mandelbrot.icns` da `icon_src.png` via `sips` (usato dal BUNDLE dell'app .app).
 - **Versione** letta dall'header di `mandel.py` (consistente tra EXE/.app/zip e sorgente, vedi
   §1). **Regole di processo** (ordine build, gitignore, rigenerazione pre-commit):
   vedi AGENTS.md.
