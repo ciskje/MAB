@@ -23,6 +23,10 @@ IS_DARWIN = (sys.platform == "darwin")
 WORKDIR = os.path.join(tempfile.gettempdir(), "mandelbrot_build")
 DISTDIR = os.path.join(tempfile.gettempdir(), "mandelbrot_dist")
 DMGDIR = os.path.join(tempfile.gettempdir(), "mandelbrot_dmg")
+# Regola generale: su dist/ (progetto/NAS) tenere SOLO le ultime KEEP_N versioni
+# dei distributivi (Mandelbrot-v<X.Y.Z>-win64.zip / -macos.dmg); le piu' vecchie
+# vengono rimosse automaticamente a fine build.
+KEEP_N = 3
 
 with open(os.path.join(HERE, "mandel.py"), encoding="utf-8") as _f:
     _head = _f.read(4096)
@@ -37,6 +41,31 @@ def run(cmd, **kw):
 def fail(msg):
     print("ERRORE:", msg, file=sys.stderr)
     sys.exit(1)
+
+
+def keep_last_n_dist(n=KEEP_N):
+    # Tieni solo le ultime n versioni (X.Y.Z) dei distributivi in dist/
+    # (progetto/NAS); rimuovi gli artefatti delle versioni piu' vecchie.
+    d = os.path.join(HERE, "dist")
+    if not os.path.isdir(d):
+        return
+    items = []
+    for fn in os.listdir(d):
+        m = re.match(r"mandelbrot-v(\d+)\.(\d+)\.(\d+)-", fn, re.IGNORECASE)
+        if m:
+            items.append(((int(m.group(1)), int(m.group(2)), int(m.group(3))), fn))
+    if not items:
+        print("cleanup dist/: nessun artefatto versionato")
+        return
+    items.sort(key=lambda x: x[0], reverse=True)
+    keep = set(v for v, _ in items[:n])
+    removed = [fn for v, fn in items if v not in keep]
+    for fn in removed:
+        os.remove(os.path.join(d, fn))
+    if removed:
+        print("cleanup dist/: rimosse", ", ".join(sorted(removed)))
+    else:
+        print("cleanup dist/: ok (ultime %d versioni trattenute)" % n)
 
 
 # 1) Icona (icon_src.png + mandelbrot.ico + mandelbrot.icns su macOS) via motore CPU di mandel.py
@@ -100,3 +129,6 @@ elif IS_DARWIN:
     print("OK: dmg =", dmg_base + ".dmg", "(progetto/NAS)")
 else:
     fail("piattaforma non supportata per la build: %s" % sys.platform)
+
+# 4) Cleanup dist/ (progetto/NAS): regola generale, tenere solo le ultime KEEP_N versioni
+keep_last_n_dist(KEEP_N)

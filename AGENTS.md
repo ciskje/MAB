@@ -46,6 +46,10 @@ sistema** (temp utente); sul **progetto/NAS** resta solo l'artefatto distributiv
   `CUDA_PATH`/PATH/Program Files) + zip `dist/Mandelbrot-v<ver>-win64.zip` sul NAS;
 - **macOS** → app `Mandelbrot.app` su disco di sistema (GPU Metal/pyobjc +
   Vulkan/wgpu, firma ad-hoc) + `.dmg` `dist/Mandelbrot-v<ver>-macos.dmg` sul NAS.
+- **Regola generale (ritenzione artefatti)**: su `dist/` (progetto/NAS) tenere
+  SOLO le ultime **3 versioni** dei distributivi (`KEEP_N` in `build_app.py`);
+  a ogni build `build_app.py` rimuove automaticamente gli zip/.dmg delle versioni
+  piu' vecchie. Per cambiarne il numero, modificare `KEEP_N`.
 - Ordine: modifica sorgente → **`python build_app.py`** → (verifica) → `git commit`.
 - File: `build_app.py` (unico script, ramificato su `sys.platform`: icona →
   PyInstaller → post → zip su Windows / .dmg su macOS) + `mandelbrot.spec` (ricetta

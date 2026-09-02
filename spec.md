@@ -270,8 +270,7 @@ block/workgroup/threadgroup 16×16, LUT incorporate come costanti (§12). Di seg
     trova a runtime via cuda-pathfinder da `CUDA_PATH`/PATH/Program Files. Senza GPU degrada su CPU.
   - **macOS** → `dist/Mandelbrot.app` (GPU Metal/pyobjc + Vulkan/wgpu, firma ad-hoc).
 - **Script**: `build_app.py` (unico script, ramificato su `sys.platform`: icona → PyInstaller
-  → post → zip su Windows). `build_app.sh` lo redirect (compatibilità); su Windows si usa
-  `build_app.ps1` (o `python build_app.py`).
+  → post → zip su Windows / .dmg su macOS).
 - **Ricetta**: `mandelbrot.spec` (PyInstaller), multipiattaforma:
   - comune: `collect_all(numba/llvmlite)` (dylib/dll di llvmlite + dati JIT),
     `PIL._tkinter_finder`, esclude `torch/matplotlib/IPython/pytest`;
@@ -289,6 +288,9 @@ block/workgroup/threadgroup 16×16, LUT incorporate come costanti (§12). Di seg
   di rete, dove la build è lenta). Sul progetto/NAS resta **solo l'artefatto distributivo**:
   su Windows la zip `dist/Mandelbrot-v<ver>-win64.zip` (generata da C:), su macOS il
   `dist/Mandelbrot-v<ver>-macos.dmg` (staging app + link `/Applications` in temp, `hdiutil UDZO`).
+- **Ritenzione artefatti**: su `dist/` (progetto/NAS) restano SOLO le ultime **3 versioni**
+  dei distributivi (`KEEP_N` in `build_app.py`); a ogni build `build_app.py` rimuove
+  automaticamente gli zip/.dmg delle versioni più vecchie (ordinati per X.Y.Z).
 - **Icona**: `make_icon.py` renderizza 1024×1024 con l'app (CPU f64, palette 'termal') →
   `icon_src.png` + `mandelbrot.ico` multi-size 16–256 (Pillow); su macOS genera anche
   `mandelbrot.icns` da `icon_src.png` via `sips` (usato dal BUNDLE dell'app .app).

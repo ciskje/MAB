@@ -1,11 +1,17 @@
 # ============================================================================
 # Insieme di Mandelbrot - visualizzatore interattivo
-# VERSIONE: 5.8.4
+# VERSIONE: 5.8.5
 # ----------------------------------------------------------------------------
 # REGOLA: ogni modifica incrementa la versione e aggiunge una voce qui sotto
 # (formato: versione - data - descrizione modifiche).
 #
 # STORICO:
+# 5.8.5 - 2026-09-02
+#   - Build: regola generale di ritenzione artefatti. build_app.py a fine build tiene
+#     solo le ultime KEEP_N (3) versioni di zip (win) / .dmg (mac) in dist/ (NAS) e
+#     rimuove automaticamente quelle piu' vecchie (ordinati per X.Y.Z). Documentata in
+#     AGENTS.md/spec.md; sistemati i riferimenti stanchi a build_app.sh/.ps1 (assenti)
+#     nella sezione build di spec.md.
 # 5.8.4 - 2026-09-02
 #   - Build macOS: make_icon.py genera ora anche mandelbrot.icns (solo darwin) da
 #     icon_src.png via sips; build_app.py la verifica prima di PyInstaller. Prima
@@ -541,7 +547,7 @@ BENCH_REF = (
     ("5070 Ti CUDA (storico)", 250.0),
 )
 
-VERSION = "5.8.4"
+VERSION = "5.8.5"
 
 # ---------------- Palette (LUT 256x3 condivisa CPU/GPU) ----------------
 _FIRE = (
