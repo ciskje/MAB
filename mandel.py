@@ -1,11 +1,43 @@
 # ============================================================================
 # Insieme di Mandelbrot - visualizzatore interattivo
-# VERSIONE: 5.6.0
+# VERSIONE: 5.8.1
 # ----------------------------------------------------------------------------
 # REGOLA: ogni modifica incrementa la versione e aggiunge una voce qui sotto
 # (formato: versione - data - descrizione modifiche).
 #
 # STORICO:
+# 5.8.1 - 2026-09-02
+#   - Benchmark: nel grafico a barre il nome hardware NON compare piu'
+#     nell'etichetta della run corrente, che riporta ora solo il metodo attivo
+#     (es. "CUDA f32 - questa run"); il nome hardware resta visibile sotto,
+#     nella griglia "Parametri del test" (riga "Hardware", introdotta in 5.8.0).
+#     I 3 riferimenti storici (BENCH_REF) mantengono il proprio nome
+#     (9900X CPU, 5070 Ti Vulkan, 5070 Ti CUDA) per distinguerli.
+# 5.8.0 - 2026-09-02
+#   - Nome dell'hardware attivo (hw_name(), nessuna dipendenza nuova: CPU dal
+#     registro Windows / 'sysctl' su macOS; GPU da CuPy/pyobjc/wgpu) ora
+#     visibile nella barra di stato dopo ogni render e nel titolo finestra.
+#   - Benchmark: l'etichetta della run corrente nel grafico a barre riporta
+#     anche il nome hardware accorciato (es. "GeForce RTX 5070 Ti (CUDA f32)
+#     - questa run"; prefisso vendor tolto, margine sinistro allargato) e la
+#     griglia dei parametri ha una riga "Hardware" col nome completo.
+# 5.7.0 - 2026-09-02
+#   - Benchmark: il dialog di risultato mostra ora anche un GRAFICO A BARE
+#     ORIZZONTALI (tk.Canvas, nessuna dipendenza nuova) che confronta la run
+#     corrente coi 3 riferimenti storici in BENCH_REF (6.62 9900X CPU,
+#     177 5070 Ti Vulkan, 250 5070 Ti CUDA, rendering/s). La barra della run
+#     corrente e' evidenziata in verde e l'etichetta riporta il METODO attivo
+#     (es. "CUDA f32 - questa run"); le barre storiche sono grigie.
+#   - Scala orizzontale LINEARE AUTOMATICA: l'asse va da 0 al massimo tra i
+#     valori (se la run corrente supera i riferimenti l'asse si adatta), step
+#     "nice" della serie 1/2/5x10^n con griglia verticale ed etichette; il
+#     valore e' scritto a fine barra, cosi' resta leggibile anche la barra
+#     minuscola della CPU (6.62).
+# 5.6.1 - 2026-09-02
+#   - Avviso Numba assente: quando Numba non e' installato (CPU -> fallback
+#     numpy single-core) l'etichetta del backend mostra "CPU f32/f64 (numpy)"
+#     (titolo + barra di stato), prima era silenziosa. Nuovo flag
+#     _NUMBA_AVAILABLE (njit non None) usato da backend().
 # 5.6.0 - 2026-09-02
 #   - NUOVO BACKEND GPU VULKAN (wgpu / wgpu-native, cross-platform): quarto
 #     motore selezionabile accanto a CPU, CUDA (NVIDIA) e Metal (Apple
@@ -477,7 +509,15 @@ CONFIG_PATH = os.path.join(os.path.expanduser("~"), "mandelbrot", "config.json")
 BENCH = dict(cx=-0.7499302568795561, cy=-0.015139113925433963, half=5.226737155905588e-05,
              w=960, h=540, secs=8.0)
 
-VERSION = "5.6.0"
+# Riferimenti storici per il grafico a barre del benchmark (rendering/s,
+# stessa regione/parametri): evidenziano il salto CPU->GPU su macchine note.
+BENCH_REF = (
+    ("9900X CPU (storico)", 6.62),
+    ("5070 Ti Vulkan (storico)", 177.0),
+    ("5070 Ti CUDA (storico)", 250.0),
+)
+
+VERSION = "5.8.1"
 
 # ---------------- Palette (LUT 256x3 condivisa CPU/GPU) ----------------
 _FIRE = (
@@ -1197,6 +1237,10 @@ except Exception:
     njit = None
     prange = None
 
+# Numba assente (import fallito) -> il motore CPU gira sul fallback numpy
+# single-core; lo segnalo nell'etichetta del backend (vedi backend()).
+_NUMBA_AVAILABLE = (njit is not None)
+
 def _numba_selftest(cdt):
     """Self-test del kernel Numba contro il loop numpy di riferimento (4x4 con
     casi limite: interiori, fuga rapida/lenta, pre-diverged, overflow), STESSA
@@ -1438,7 +1482,59 @@ def compute_cpu(cx, cy, half, w, h, mi, my_gen=0, prec="f64"):
 def backend():
     # v5.6.0: 4 backend selezionabili; la precisione (f32/f64) e' comune.
     # Metal/Vulkan sono f32-only, CUDA f32 (+f64 se il kernel e' compilato).
-    return _ACTIVE.upper() + " " + _PREC if _ACTIVE != "cpu" else "CPU " + _PREC
+    # v5.6.1: se Numba e' assente la CPU usa il fallback numpy single-core ->
+    # lo segnalo nell'etichetta (titolo + barra di stato), prima era silenzioso.
+    if _ACTIVE != "cpu":
+        return _ACTIVE.upper() + " " + _PREC
+    return "CPU " + _PREC + ("" if _NUMBA_AVAILABLE else " (numpy)")
+
+_HW_CACHE = {}
+
+def hw_name():
+    """Nome dell'hardware attivo (GPU o CPU), in cache per backend (v5.8.0).
+    Rilevamento senza dipendenze nuove: CPU dal registro Windows (winreg) o
+    'sysctl' su macOS; GPU da CuPy (CUDA), pyobjc (Metal) o wgpu (Vulkan,
+    gia' rilevato in VulkanBackend.name). In caso di errore -> generico."""
+    if _ACTIVE in _HW_CACHE:
+        return _HW_CACHE[_ACTIVE]
+    is_cpu = (_ACTIVE == "cpu")
+    name = "CPU" if is_cpu else "GPU"
+    try:
+        import platform
+        if is_cpu:
+            s = platform.system()
+            if s == "Windows":
+                import winreg
+                k = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE,
+                                   r"HARDWARE\DESCRIPTION\System\CentralProcessor\0")
+                try:
+                    name = winreg.QueryValueEx(k, "ProcessorNameString")[0].strip()
+                finally:
+                    winreg.CloseKey(k)
+            elif s == "Darwin":
+                import subprocess
+                name = subprocess.check_output(
+                    ["sysctl", "-n", "machdep.cpu.brand_string"],
+                    text=True).strip()
+            else:
+                name = platform.processor() or name
+        elif _ACTIVE == "cuda":
+            import cupy as cp
+            # dispositivo 0 = quello che CuPy usa di default (con piu' GPU
+            # l'ordine CUDA puo' differire da quello nvidia-smi)
+            name = cp.cuda.runtime.getDeviceProperties(0)["name"]
+            if isinstance(name, bytes):
+                name = name.decode("utf-8", "replace")
+        elif _ACTIVE == "metal":
+            name = str(_METAL_BE.dev.name)
+        elif _ACTIVE == "vulkan":
+            name = str(_VULKAN_BE.name)
+    except Exception:
+        pass
+    if not name:
+        name = "CPU" if is_cpu else "GPU"
+    _HW_CACHE[_ACTIVE] = name
+    return name
 
 def compute(cx, cy, half, w, h, mi, buf=None, prec=None, my_gen=0):
     if _ACTIVE != "cpu":
@@ -1609,7 +1705,7 @@ class MandelbrotApp:
 
     # ---------------- Helper UI ----------------
     def _refresh_title(self):
-        t = f"Insieme di Mandelbrot v{VERSION} - {backend()}"
+        t = f"Insieme di Mandelbrot v{VERSION} - {backend()} ({hw_name()})"
         if self.view_file:
             t += " - " + os.path.basename(self.view_file)
         self.root.title(t)
@@ -1886,7 +1982,7 @@ class MandelbrotApp:
         self.photo = ImageTk.PhotoImage(img)
         self.canvas.delete("all")
         self.canvas.create_image(w // 2, h // 2, image=self.photo)
-        self.status.config(text=f"{msg} | {backend()} | palette: {_PALETTE} | render: {rt*1000:.0f} ms")
+        self.status.config(text=f"{msg} | {backend()} \u00b7 {hw_name()} | palette: {_PALETTE} | render: {rt*1000:.0f} ms")
 
     # ---------------- File: PNG, zona (JSON), config ----------------
     def save_png(self):
@@ -2057,8 +2153,57 @@ class MandelbrotApp:
             ("Iterazioni", f"{mi}\u00a0 (formula auto)"),
             ("Risoluzione", f"{b['w']} \u00d7 {b['h']} px"),
             ("Motore", f"{backend()} (corrente)"),
+            ("Hardware", hw_name()),
             ("Durata", f"{b['secs']:.0f} s"),
         ]
+
+    def _bench_chart(self, parent, rps):
+        """Grafico a barre orizzontali del benchmark: i 3 riferimenti storici
+        (BENCH_REF, con nome hardware) + la run corrente (rps) evidenziata, col
+        solo metodo attivo nell'etichetta (es. "CUDA f32 - questa run"). Il nome
+        hardware della run corrente NON e' nel grafico (v5.8.1: mostrato sotto
+        dal dialog chiamante). Scala orizzontale lineare automatica sul massimo
+        dei valori. Ritorna il Canvas (da packare da chi chiama)."""
+        bars = list(BENCH_REF)
+        # v5.8.1: la run corrente mostra solo il metodo (backend); il nome
+        # hardware NON e' nel grafico -> mostrato sotto dal dialog chiamante.
+        bars.append((backend() + " \u2014 questa run",
+                      float(rps)))
+        raw_max = max(v for _, v in bars)
+        # step "nice" per ~5 divisioni (serie 1/2/5 x 10^n); l'asse termina
+        # esattamente sull'ultimo tick >= massimo (mai oltre)
+        raw = raw_max / 5.0
+        mag = 10 ** math.floor(math.log10(raw))
+        step = next(m2 * mag for m2 in (1.0, 2.0, 5.0, 10.0) if m2 * mag >= raw)
+        nt = max(1, int(math.ceil(raw_max / step - 1e-9)))
+        axis_max = nt * step
+        W, H = 590, 150
+        L, R, T, B = 230, 60, 8, 26
+        pw = W - L - R
+        bar_h, gap = 20, 10
+        n = len(bars)
+        total = n * bar_h + (n - 1) * gap
+        y0 = T + max((H - T - B - total) // 2, 0)
+        cv = tk.Canvas(parent, width=W, height=H, highlightthickness=0)
+        def x(v):
+            return L + pw * v / axis_max
+        for k in range(nt + 1):
+            t = k * step
+            xt = x(t)
+            cv.create_line(xt, T, xt, H - B, fill="#a0a0a0")
+            cv.create_text(xt, H - B + 12, text="%g" % t, font=("Consolas", 9))
+        cv.create_line(L, H - B, W - R, H - B, fill="#8a8a8a")
+        for i, (name, v) in enumerate(bars):
+            y = y0 + i * (bar_h + gap)
+            cur = (i == n - 1)
+            col = "#2ea44f" if cur else "#8a8a8a"
+            cv.create_text(L - 8, y + bar_h / 2, text=name, anchor="e",
+                           font=("Segoe UI", 9, "bold" if cur else "normal"))
+            xe = max(x(v), L + 1)
+            cv.create_rectangle(L, y, xe, y + bar_h, fill=col, outline="")
+            cv.create_text(xe + 6, y + bar_h / 2, text="%g" % v, anchor="w",
+                           font=("Consolas", 10, "bold"))
+        return cv
 
     def _modal(self, win):
         """Rende 'win' modale e centrato su self.root; blocca fino a chiusura.
@@ -2134,6 +2279,9 @@ class MandelbrotApp:
                      foreground="#2ea44f").pack(pady=(0, 8))
             tk.Label(body, text=f"{count} rendering in {secs:.1f} s   \u00b7   {secs/count*1000:.0f} ms ciascuno",
             ).pack(pady=(0, 16))
+            tk.Label(body, text="Confronto coi riferimenti storici (rendering/s):",
+                     ).pack(anchor="w", pady=(0, 4))
+            self._bench_chart(body, count / secs).pack(anchor="w", pady=(2, 14))
         else:
             tk.Label(body, text="BENCHMARK FALLITO",
                      font=("Segoe UI", 20, "bold"),

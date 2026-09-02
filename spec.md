@@ -5,7 +5,7 @@ Descrizione concisa ma sufficiente perché un altro LLM (o sviluppatore) ricrei 
 Ogni modifica al sorgente DEVE aggiornare anche questa spec (vedi AGENTS.md).
 
 ## Panoramica
-- Un solo file **Python 3.12**: GUI **tkinter**, rendering su uno di **4 backend
+- Un solo file **Python 3.14**: GUI **tkinter**, rendering su uno di **4 backend
   selezionabili** — **CPU (numpy/Numba)**, **CUDA (CuPy `RawKernel`)** su NVIDIA,
   **Metal (pyobjc)** su Apple Silicon, **Vulkan (wgpu/wgpu-native)** cross-platform
   (AMD/NVIDIA/Intel) — con fallback **CPU (numpy/Numba)**, Pillow per il PNG.
@@ -19,9 +19,15 @@ Ogni modifica al sorgente DEVE aggiornare anche questa spec (vedi AGENTS.md).
   **Pan**: trascinamento.
 - `R` = reset (vista + tutti i settaggi ai default); `Ctrl+S` = salva PNG.
 - Layout: toolbar (Motore / Palette / Precisione / Iter), riga pulsanti (campo iterazioni +
-  `−1000`/`+1000`, Benchmark, Reset), canvas, barra di stato `messaggio | backend | palette | render: N ms`.
-  Font 13 pt. Menu File: Salva immagine…, Carica zona…, Salva zona, Salva zona con nome…, Esci.
-- Titolo: `Insieme di Mandelbrot v<VER> - <backend>` + ` - <file zona corrente>` se presente.
+   `−1000`/`+1000`, Benchmark, Reset), canvas, barra di stato `messaggio | backend · hardware | palette | render: N ms`.
+   Font 13 pt. Menu File: Salva immagine…, Carica zona…, Salva zona, Salva zona con nome…, Esci.
+- Titolo: `Insieme di Mandelbrot v<VER> - <backend> (<hardware>)` + ` - <file zona corrente>` se presente.
+- **Nome hardware** (v5.8.0, `hw_name()`): CPU dal registro Windows (`ProcessorNameString`)
+  o `sysctl machdep.cpu.brand_string` su macOS; GPU da CuPy
+  (`runtime.getDeviceProperties(0)["name"]`, il device 0 CUDA che CuPy usa di default —
+  con più GPU l'ordine CUDA può differire da nvidia-smi), pyobjc (`MTLDevice.name`) o
+  wgpu (`adapter.info["device"]`, preferenza high-performance); nessuna dipendenza nuova,
+  in caso di errore fallback generico "CPU"/"GPU"; in cache per backend.
 - **Tema UI**: l'UI usa i **widget nativi macOS** (nessun colore forzato) che
   seguono il tema del **sistema** — in Dark Mode i bottoni/checkbox/radio restano
   aqua scuri con testo chiaro, senza la cornice nera che si otteneva forzando un
@@ -87,8 +93,12 @@ Ogni modifica al sorgente DEVE aggiornare anche questa spec (vedi AGENTS.md).
   nessuna allocazione per render.
 - **CPU**: escape loop in **Numba** `@njit(parallel=True)` (dipendenza
   opzionale): parallelo sulle righe (`prange`), early-exit per pixel; geometry,
-  interior analitico e coloring restano in numpy (il kernel Numba produce `it[]` e,
-   `mag[] = |z|²` alla fuga, usato dal coloring smooth).
+   interior analitico e coloring restano in numpy (il kernel Numba produce `it[]` e,
+    `mag[] = |z|²` alla fuga, usato dal coloring smooth).
+   **Numba assente**: quando Numba non è installato, la CPU gira sul **fallback
+   numpy single-core** e l'etichetta del backend mostra `CPU f32/f64 (numpy)` in
+   **titolo + barra di stato** (prima era silenziosa); flag `_NUMBA_AVAILABLE =
+   (njit is not None)`, usato da `backend()`.
    **CPU f32/f64**: la precisione (f32/f64) vale anche per il motore CPU
   (prima sempre f64): tutti gli array di lavoro sono del dtype corrispondente
   (X/Y restano f64: il prodotto con `half` si calcola in f64 e si arrotonda al
@@ -143,9 +153,10 @@ da questo registro.
   disponibili in ordine di preferenza (CUDA > Metal > Vulkan > CPU); `_ACTIVE` è il
   backend corrente (stringa `cpu|cuda|metal|vulkan`); il **default** è il primo GPU
   disponibile, altrimenti CPU (`_default_backend`). `compute` dispatcha su `_ACTIVE`;
-  `compute_gpu` è un dispatcher (`_compute_gpu_cuda` / `_compute_gpu_metal` /
-  `_compute_gpu_vulkan`). `backend()` mostra "CUDA f32|f64" / "Metal f32" /
-  "VULKAN f32" / "CPU f32|f64".
+   `compute_gpu` è un dispatcher (`_compute_gpu_cuda` / `_compute_gpu_metal` /
+   `_compute_gpu_vulkan`). `backend()` mostra "CUDA f32|f64" / "METAL f32" /
+   "VULKAN f32" / "CPU f32|f64" (i nomi GPU sono upper-case, CPU no; senza
+   Numba la CPU mostra "CPU f32|f64 (numpy)").
 - **f64**: disponibile su CPU (Numba) e su CUDA (se il kernel f64 si compila).
   **Metal e Vulkan sono f32-only** (Apple Silicon non supporta `double`; su Vulkan la
   scelta è la stessa di Metal). Di conseguenza:
@@ -210,7 +221,19 @@ da questo registro.
   usano il proprio buffer di output, CPU la memoria numpy. Per confrontare versioni,
   usarlo nella stessa modalità.
 - Report: dialog con **rendering/s in grande** (il vero risultato, ~42pt verde), statistiche
-  (n. rendering, ms/render) e griglia dei parametri; errore → "BENCHMARK FALLITO" + dettaglio.
+  (n. rendering, ms/render), **grafico a barre orizzontali** e griglia dei parametri;
+  errore → "BENCHMARK FALLITO" + dettaglio.
+- **Grafico a barre** (v5.7.0, `tk.Canvas`, nessuna dipendenza nuova): i 3
+  riferimenti storici in `BENCH_REF` (6.62 9900X CPU, 177 5070 Ti Vulkan, 250
+  5070 Ti CUDA, rendering/s) **mantengono il proprio nome hardware**; la run
+  corrente evidenziata in verde riporta nell'etichetta **solo il metodo attivo**
+  (es. "CUDA f32 — questa run") e dal **v5.8.1 NON include il nome hardware**; le
+  barre storiche sono grigie. Il **nome hardware** della run corrente è nella
+  **griglia dei parametri** (riga **Hardware** col nome completo, via `hw_name()`).
+  Scala orizzontale **lineare automatica**: asse 0 → massimo tra i valori (si adatta
+  se la run corrente supera i riferimenti), step "nice" (serie 1/2/5×10ⁿ) con griglia
+  verticale ed etichette; il valore è scritto a fine barra (leggibile anche per la
+  barra CPU minuscola).
 
 ## Build dell'app (multipiattaforma)
 - **one-dir self-contained**, senza dipendenze di Python/librerie per l'utente:

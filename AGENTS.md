@@ -1,9 +1,10 @@
 # Convenzioni del progetto
 
 ## Struttura del progetto
-- `mandel.py` — il programma (visualizzatore interattivo, Tkinter + GPU
-  (CUDA/CuPy o Metal/pyobjc, slot "GPU" generico v5.4.0) + Numba);
-  versione e STORICO nel commento iniziale del file (fonte di verità).
+- `mandel.py` — il programma (visualizzatore interattivo, Tkinter + 4 backend
+  selezionabili: CPU (numpy/Numba), CUDA (CuPy), Metal (pyobjc), Vulkan (wgpu),
+  con fallback CPU); versione e STORICO nel commento iniziale del file
+  (fonte di verità).
 - `spec.md` — specifica del programma; DEVE restare in sync col sorgente
    (vedi regola di versionamento sotto).
 - `mandelbrot_*.json` — zone salvate dall'app (dato utente, gitignorato).
@@ -32,11 +33,12 @@ e si trova in cima al file.
 Prima di committare DEVE essere rigenerata l'app self-contained (one-dir), così
 l'artefatto riflette esattamente il sorgente committato:
 - **Windows** → `dist/Mandelbrot/Mandelbrot.exe` + `_internal/` (CPU sempre;
-  GPU CuPy incluso ma **runtime CUDA NON bundled**: la GPU funziona solo se
-  l'utente installa driver NVIDIA + runtime CUDA, che CuPy trova via
-  cuda-pathfinder da `CUDA_PATH`/PATH/Program Files) + zip
-  `dist/Mandelbrot-v<ver>-win64.zip`; **macOS** → `dist/Mandelbrot.app`
-  (GPU Metal/pyobjc, firma ad-hoc).
+  GPU Vulkan (wgpu) bundled e subito disponibile; GPU CuPy incluso ma
+  **runtime CUDA NON bundled**: la GPU CUDA funziona solo se l'utente
+  installa driver NVIDIA + runtime CUDA, che CuPy trova via cuda-pathfinder da
+  `CUDA_PATH`/PATH/Program Files) + zip `dist/Mandelbrot-v<ver>-win64.zip`;
+  **macOS** → `dist/Mandelbrot.app` (GPU Metal/pyobjc + Vulkan/wgpu,
+  firma ad-hoc).
 - Ordine: modifica sorgente → **`python build_app.py`** → (verifica) → `git commit`.
   (Su macOS anche `./build_app.sh`, ora redirect a `build_app.py`; su Windows
   `.\build_app.ps1` oppure `python build_app.py`.)
