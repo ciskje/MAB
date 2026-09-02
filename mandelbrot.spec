@@ -1,13 +1,16 @@
 # -*- mode: python ; coding: utf-8 -*-
 # Ricetta PyInstaller per l'app Mandelbrot self-contained (one-dir), multipiattaforma:
-#   - macOS   -> dist/Mandelbrot.app             (GPU Metal/pyobjc, firma ad-hoc)
+#   - macOS   -> dist/Mandelbrot.app             (GPU Metal/pyobjc + Vulkan/wgpu, firma ad-hoc)
 #   - Windows -> dist/Mandelbrot/Mandelbrot.exe  (CPU sempre; GPU NVIDIA se l'utente
-#           installa driver + runtime CUDA)
+#           installa driver + runtime CUDA; GPU AMD/NVIDIA/Intel via Vulkan/wgpu)
 # Dipendenze comuni di mandel.py: numpy, Pillow(ImageTk), tkinter; fast path CPU
-# numba+llvmlite (l'app degrada su numpy se assente). La GPU e' rilevata a runtime
-# (CUDA su NVIDIA, Metal su Apple Silicon) ed e' gia' guardata nel sorgente.
+# numba+llvmlite (l'app degrada su numpy se assente). I backend GPU sono rilevati
+# a runtime (CUDA su NVIDIA, Metal su Apple Silicon, Vulkan/wgpu cross-platform)
+# e sono gia' guardati nel sorgente.
 # Il runtime CUDA NON e' bundled: cupy e' incluso e trova le DLL CUDA (toolkit o pip
 # nvidia/*) installate dall'utente via cuda-pathfinder (CUDA_PATH / PATH / Program Files).
+# wgpu (wgpu-native) E' bundled (lib nativa dentro la wheel): la GPU Vulkan funziona
+# out-of-the-box senza runtime aggiuntivi, su AMD/NVIDIA/Intel.
 
 import os
 import re
@@ -57,6 +60,17 @@ if IS_DARWIN:
     hiddenimports += collect_submodules("objc")
     hiddenimports += ["Metal", "objc", "Foundation"]
 
+    # --- wgpu / wgpu-native (GPU Vulkan cross-platform, lib nativa nella wheel) ---
+    for mod in ("wgpu", "cffi"):
+        try:
+            _d, _b, _h = collect_all(mod)
+            datas += _d
+            binaries += _b
+            hiddenimports += _h
+        except Exception:
+            hiddenimports += [mod]
+    hiddenimports += ["wgpu"]
+
     # --- Numba OpenMP: omppool.so richiede @rpath/libomp.dylib (il suo rpath e'
     #     hardcoded a una dir CI inesistente). Unica copia disponibile:
     #     torch/lib/libomp.dylib. Nel bundle con basename 'libomp.dylib' ->
@@ -84,6 +98,19 @@ elif IS_WIN32:
     #     CUDA (toolkit o pacchetti pip nvidia/*); cupy (via cuda-pathfinder) le
     #     trova da solo tramite CUDA_PATH / PATH / Program Files. Senza CUDA,
     #     l'app degrada automaticamente sulla CPU (Numba/numpy) - guardato in mandel.py. ---
+
+    # --- wgpu / wgpu-native (GPU Vulkan cross-platform, AMD/NVIDIA/Intel).
+    #     La lib nativa e' dentro la wheel -> bundled e funziona out-of-the-box,
+    #     senza runtime esterni. cffi (dipendenza di wgpu) incluso per le sue DLL. ---
+    for mod in ("wgpu", "cffi"):
+        try:
+            _d, _b, _h = collect_all(mod)
+            datas += _d
+            binaries += _b
+            hiddenimports += _h
+        except Exception:
+            hiddenimports += [mod]
+    hiddenimports += ["wgpu", "wgpu.backends.wgpu_native"]
 
     # --- Runtime hook: cartella EXE + _internal sul percorso DLL (difensivo) ---
     runtime_hooks = [os.path.join(HERE, "hook_dlldir.py")]

@@ -3,8 +3,10 @@
 # Ordine: icona -> PyInstaller (mandelbrot.spec) -> post (verifica + zip).
 #   Windows: python build_app.py   -> dist/Mandelbrot/Mandelbrot.exe + zip
 #   macOS  : ./build_app.sh        -> dist/Mandelbrot.app (firma ad-hoc)
-# Nota: il runtime CUDA NON e' incluso; la GPU funziona solo se l'utente ha
+# Nota: il runtime CUDA NON e' incluso; la GPU CUDA funziona solo se l'utente ha
 # installato driver NVIDIA + runtime CUDA (trovati da cupy via cuda-pathfinder).
+# La GPU Vulkan (wgpu/wgpu-native, AMD/NVIDIA/Intel) E' invece bundled e funziona
+# out-of-the-box.
 import os
 import re
 import shutil

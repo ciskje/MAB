@@ -5,9 +5,11 @@ Descrizione concisa ma sufficiente perché un altro LLM (o sviluppatore) ricrei 
 Ogni modifica al sorgente DEVE aggiornare anche questa spec (vedi AGENTS.md).
 
 ## Panoramica
-- Un solo file **Python 3.12**: GUI **tkinter**, rendering **GPU** (slot generico:
-  **CUDA (CuPy `RawKernel`)** su NVIDIA, **Metal (pyobjc)** su Apple Silicon) con
-  fallback **CPU (numpy/Numba)**, Pillow per il PNG.
+- Un solo file **Python 3.12**: GUI **tkinter**, rendering su uno di **4 backend
+  selezionabili** — **CPU (numpy/Numba)**, **CUDA (CuPy `RawKernel`)** su NVIDIA,
+  **Metal (pyobjc)** su Apple Silicon, **Vulkan (wgpu/wgpu-native)** cross-platform
+  (AMD/NVIDIA/Intel) — con fallback **CPU (numpy/Numba)**, Pillow per il PNG.
+  I backend non disponibili restano visibili in toolbar ma disabilitati.
 - Esecuzione asincrona: il render gira su thread separato, l'UI non si blocca mai.
 - Metodi di `MandelbrotApp` raggruppati per funzione: UI, vista, controlli, pipeline, file, benchmark.
 
@@ -39,9 +41,9 @@ Ogni modifica al sorgente DEVE aggiornare anche questa spec (vedi AGENTS.md).
   numerica); coloring continuo `nu = it + 1 − log2(0.5·ln|z|²)`, `t = (nu/mi)^0.35`.
    **CPU**: **stesso** coloring continuo della GPU `nu = it + 1 − log2(0.5·ln|z|²)`,
   `t = (nu/mi)^0.35` (il kernel Numba/fallback esportano anche `mag = |z|²` alla fuga);
-  solo i pixel mai fuggiti (`mag==0`) restano neri. CPU e GPU (CUDA/Metal) producono lo
-  stesso colore (a parte 1-2 ULP di `log2`/`log` libm-vs-kernel → ≤1 entry di LUT;
-   verificato dal gate).
+   solo i pixel mai fuggiti (`mag==0`) restano neri. CPU e GPU (CUDA/Metal/Vulkan)
+   producono lo stesso colore (a parte 1-2 ULP di `log2`/`log` libm-vs-kernel →
+   ≤1 entry di LUT; verificato dal gate).
 - **LUT 256×3** condivisa CPU/GPU: `np.interp` delle stop su 256 punti, ×255, clip, uint8;
   colore = `LUT[round(t·255)]`.
 - **Kernel GPU (CUDA)**: 1 px/thread (micro-benchmark A/B, 1.8× su z1 / 1.1× su z3
@@ -57,8 +59,22 @@ Ogni modifica al sorgente DEVE aggiornare anche questa spec (vedi AGENTS.md).
   `[[buffer(0)]]`; LUT incornicate nel sorgente MSL (una `constant` per palette, come
   CUDA). **f32-only**: su Apple Silicon `double` non è supportato → il backend Metal non
   fa f64 (f64 resta solo CPU/CUDA). Deterministico (2 run bit-identici). H2D/D2H via
-  `buf.contents().as_buffer(N)` (memoryview scrivibile, C-level, ~0.01 ms). 12–30× più
-   veloce della CPU (misurato su M1).
+   `buf.contents().as_buffer(N)` (memoryview scrivibile, C-level, ~0.01 ms). 12–30× più
+    veloce della CPU (misurato su M1).
+- **Kernel GPU (Vulkan, wgpu/wgpu-native, cross-platform)**: compute shader WGSL
+   `main`, 1 px/thread, workgroup 16×16 (256), dispatch `(⌈w/16⌉, ⌈h/16⌉)`; **stesso**
+   criterio di escape, interior analitico e coloring smooth di CUDA/MSL/CPU.
+   **Vincoli WGSL** (vs MSL/CUDA): nessun tipo `u8` → **LUT e output sono `array<u32>`
+   con colori packed `0x00RRGGBB`** (1 px = 1 `u32`); al readback si unpacka in numpy
+   `(h,w,3)` (shift R/G/B). Parametri in **due buffer uniform**: `vec4<f32>`
+   (cx,cy,half) + `vec4<i32>` (w,h,mi,pal); LUT in un buffer `storage` con tutte le
+   palette concatenate (selezione `lut[pal*256+idx]`, come CUDA/MSL); built-in
+   `min/max/pow/sqrt/log/log2` (senza suffisso `f`, a differenza di MSL). **f32-only**
+   (come Metal). Deterministico (2 run bit-identici, verificato su 780M). H2D via
+   `queue.write_buffer` su buffer persistenti (uso `UNIFORM|COPY_DST`), D2H via
+   `queue.read_buffer` su buffer `STORAGE|COPY_SRC`; un `threading.Lock` serializza
+   (compute sincrono: `submit` + `read_buffer`). Funziona out-of-the-box su
+   AMD/NVIDIA/Intel (lib nativa nella wheel, no runtime esterno).
 - **D2H pinned**: buffer host pinned cacheato per dimensione
   (`cp.cuda.PinnedMemory` + `cp.cuda.runtime.memcpy(..., memcpyDeviceToHost)`, DMA ~1,7×
   del `.get()` pageable), con fallback `.get()`. La vista numpy: `np.frombuffer` su
@@ -119,23 +135,28 @@ da questo registro.
   sul valore auto corrente**.
 
 ## Backend e precisione
-- CPU: numpy/Numba, **f32** o **f64** (prima sempre f64).
-- **Slot GPU generico**: UI e config espongono "Motore CPU / GPU" (non più
-  "CPU/CUDA"). Rilevamento all'avvio: **preferisco CUDA** (ha f64) se c'è un driver
-  NVIDIA, altrimenti **Metal** (pyobjc, Apple Silicon). `_GPU_BACKEND` ∈ {`"cuda"`,
-  `"metal"`, `None`}; `compute_gpu` è un dispatcher (`_compute_gpu_cuda` /
-  `_compute_gpu_metal`). `backend()` mostra "CUDA f32|f64" / "Metal f32" / "CPU f32|f64".
-- **f64**: disponibile su CPU (Numba) e su CUDA (se il kernel f64 si compila). **Metal
-  è f32-only** (su Apple Silicon `double` non è supportato). Di conseguenza:
+- **CPU**: numpy/Numba, **f32** o **f64** (prima sempre f64). Sempre disponibile.
+- **Selezione 4 backend (v5.6.0)**: la toolbar "Motore" ha 4 **radio** —
+  `CPU` / `CUDA` / `Metal` / `Vulkan` (stesso frame = gruppo radio unico). I backend
+  **non disponibili restano visibili ma disabilitati** (grigi). Rilevamento all'avvio:
+  `_CUDA_OK`/`_METAL_OK`/`_VULKAN_OK` per ciascuno; `_BACKENDS_OK` è l'elenco di quelli
+  disponibili in ordine di preferenza (CUDA > Metal > Vulkan > CPU); `_ACTIVE` è il
+  backend corrente (stringa `cpu|cuda|metal|vulkan`); il **default** è il primo GPU
+  disponibile, altrimenti CPU (`_default_backend`). `compute` dispatcha su `_ACTIVE`;
+  `compute_gpu` è un dispatcher (`_compute_gpu_cuda` / `_compute_gpu_metal` /
+  `_compute_gpu_vulkan`). `backend()` mostra "CUDA f32|f64" / "Metal f32" /
+  "VULKAN f32" / "CPU f32|f64".
+- **f64**: disponibile su CPU (Numba) e su CUDA (se il kernel f64 si compila).
+  **Metal e Vulkan sono f32-only** (Apple Silicon non supporta `double`; su Vulkan la
+  scelta è la stessa di Metal). Di conseguenza:
   - la precisione è un unico settaggio globale (default f32), ma il **bottone f64 ha
-    stato dinamico**: abilitato solo se lo slot corrente lo fa — CPU sempre, CUDA con
-    kernel f64, **Metal mai** (`_sync_precision_buttons`, chiamato a ogni cambio motore,
-    in `set_backend`/`reset`/`load_config`);
-  - passando a un motore f32-only con f64 attiva, si torna a f32;
-  - `set_prec`/`_select_precision` rifiutano f64 se lo slot corrente non lo fa.
-- Senza GPU il motore GPU è disabilitato (f32/f64 restano selezionabili sulla CPU).
-  Con Metal attivo il bottone f64 è disabilitato; tornando a CPU f32/f64 sono di nuovo
-  selezionabili.
+    stato dinamico**: abilitato solo se il backend corrente lo fa — CPU sempre, CUDA con
+    kernel f64, **Metal e Vulkan mai** (`_sync_precision_buttons`, chiamato a ogni cambio
+    motore, in `set_backend`/`reset`/`load_config`);
+  - passando a un backend f32-only con f64 attiva, si torna a f32;
+  - `set_prec`/`_select_precision` rifiutano f64 se il backend corrente non lo fa.
+- Senza GPU il default resta CPU (i radio GPU restano grigi). Con Metal/Vulkan attivo
+  il bottone f64 è disabilitato; tornando a CPU f32/f64 sono di nuovo selezionabili.
 - **Nota (misurata)**: f32 NON accelera il loop di escape (catena dipendente
   seriale, latency-bound: scalare f32 ≈ scalare f64, in deep zoom leggermente più
   lento); il guadagno è solo sui passi memory-bound (geometria/prefiltro/coloring):
@@ -164,11 +185,13 @@ da questo registro.
   non viene più ripristinato dalla config) → "Salva zona" resta disabilitato finché
   l'utente non definisce un nome con "Salva zona con nome…" o non carica una zona.
 - **Config**: `~/mandelbrot/config.json` con
-   `precision, palette, backend, bench` — `backend` ∈ {`"cpu"`, `"gpu"`} (un
-  vecchio valore `"cuda"` è mappato su `"gpu"` alla lettura) — (la **vista** `cx, cy,
-   half, mi, mi_auto` e `view_file` non sono più persistite: eventuali
-  vecchi valori in config esistenti sono ignorati); salvata all'uscita e **throttled
-  ~1 s** sui cambiamenti; reset riporta i default.
+   `precision, palette, backend, bench` — `backend` = il backend **attivo** per nome
+   ∈ {`"cpu"`, `"cuda"`, `"metal"`, `"vulkan"`} (v5.6.0: prima era `"cpu"`/`"gpu"`; i
+  vecchi valori `"gpu"`/`"cuda"` sono migrati al default GPU / a `"cuda"` alla
+  lettura, e un backend non disponibile resta sul default di avvio) — (la **vista**
+   `cx, cy, half, mi, mi_auto` e `view_file` non sono più persistite: eventuali
+   vecchi valori in config esistenti sono ignorati); salvata all'uscita e **throttled
+   ~1 s** sui cambiamenti; reset riporta i default.
 - **Avvio**: il programma parte SEMPRE con la configurazione di default —
   vista sull'intero insieme di Mandelbrot (`cx=-0.5, cy=0, half=1.5`) + MI auto —
   come la prima volta; la vista precedente si recupera solo con "Carica zona…".
@@ -182,23 +205,25 @@ da questo registro.
   benchmark comparabile anche se la formula auto cambia.
 - Parametri in `config.json` (chiave `bench`, overridibile; una vecchia `bench.mi` è ignorata).
 - Esegue nella **modalità corrente** dell'app (prima era sempre CUDA f32):
-  motore CPU/GPU + precisione f32/f64 come selezionati in toolbar; su CUDA usa un
-  buffer proprio (no contesa col render normale), Metal usa il proprio buffer di
-  output, CPU la memoria numpy. Per confrontare versioni, usarlo nella stessa modalità.
+  motore (CPU/CUDA/Metal/Vulkan) + precisione f32/f64 come selezionati in toolbar;
+  su CUDA usa un buffer proprio (no contesa col render normale), Metal e Vulkan
+  usano il proprio buffer di output, CPU la memoria numpy. Per confrontare versioni,
+  usarlo nella stessa modalità.
 - Report: dialog con **rendering/s in grande** (il vero risultato, ~42pt verde), statistiche
   (n. rendering, ms/render) e griglia dei parametri; errore → "BENCHMARK FALLITO" + dettaglio.
 
 ## Build dell'app (multipiattaforma)
 - **one-dir self-contained**, senza dipendenze di Python/librerie per l'utente:
-  la CPU è sempre disponibile (Numba/numpy bundled); la GPU richiede solo che
-  l'utente abbia driver + runtime (NVIDIA su Windows, Apple Silicon su macOS):
+  la CPU è sempre disponibile (Numba/numpy bundled); la **GPU Vulkan (wgpu) è
+  bundled e funziona out-of-the-box** (lib nativa nella wheel, AMD/NVIDIA/Intel);
+  la GPU CUDA richiede solo che l'utente abbia driver + runtime NVIDIA:
   - **Windows** → `dist/Mandelbrot/Mandelbrot.exe` + `_internal/` + zip
     `dist/Mandelbrot-v<ver>-win64.zip`. GPU CuPy incluso ma **runtime CUDA NON
-    bundled**: la GPU funziona solo se l'utente installa driver NVIDIA + runtime
+    bundled**: la GPU CUDA funziona solo se l'utente installa driver NVIDIA + runtime
     CUDA (toolkit o pacchetti pip `nvidia/*`), che CuPy trova a runtime via
-    cuda-pathfinder da `CUDA_PATH`/PATH/Program Files; senza CUDA l'app degrada
-    automaticamente su CPU.
-  - **macOS** → `dist/Mandelbrot.app` (GPU Metal/pyobjc, firma ad-hoc).
+    cuda-pathfinder da `CUDA_PATH`/PATH/Program Files. GPU Vulkan (wgpu) invece
+    bundled e subito disponibile. Senza alcuna GPU l'app degrada su CPU.
+  - **macOS** → `dist/Mandelbrot.app` (GPU Metal/pyobjc + Vulkan/wgpu, firma ad-hoc).
 - **Script**: `build_app.py` (unico script, ramificato su `sys.platform`:
   icona → PyInstaller → post). `build_app.sh` lo redirect (compatibilità); su
   Windows si usa `build_app.ps1` (o `python build_app.py`).
@@ -207,10 +232,13 @@ da questo registro.
     `PIL._tkinter_finder`, esclude `torch/matplotlib/IPython/pytest`;
   - **win32**: `collect_all(cupy)` (solo moduli, **NO DLL CUDA**: il runtime
     NVIDIA non è bundle, l'utente lo installa e CuPy lo trova via
-    cuda-pathfinder), icona `mandelbrot.ico`, versione EXE (versioninfo),
+    cuda-pathfinder), `collect_all(wgpu/cffi)` (GPU Vulkan, lib nativa
+    `wgpu/resources/*.dll` bundled + hook `hook-wgpu.py` di wgpu), icona
+    `mandelbrot.ico`, versione EXE (versioninfo),
     runtime hook `hook_dlldir.py` (`os.add_dll_directory` su cartella EXE +
     `_internal`, difensivo);
-  - **darwin**: `collect_all(objc/Foundation/Metal)` + submoduli, `libomp.dylib`
+  - **darwin**: `collect_all(objc/Foundation/Metal)` + submoduli,
+    `collect_all(wgpu/cffi)` (GPU Vulkan), `libomp.dylib`
     da `torch/lib` (il rpath di `omppool` è hardcoded a una dir CI inesistente),
     `BUNDLE` → `.app` (icon `.icns`, bundle_id, plist).
 - **Icona**: `make_icon.py` renderizza 1024×1024 con l'app (CPU f64, palette
@@ -243,9 +271,31 @@ da questo registro.
     (C-level, ~0.01 ms) — è il ponte rapido (la varlist NON è bytes-like);
   - `setBuffer:offset:atIndex:` ha firma `(buffer, **offset**, **INDEX**)` →
     `(pbuf, 0, 1)`, non `(pbuf, 1, 0)`;
-  - su Apple Silicon **`double` non è supportato** → il kernel è f32-only;
-  - il compute è sincrono (`commit` + `waitUntilCompleted` + read); un `threading.Lock`
-    serializza le chiamate; 2 run sono **bit-identici** (deterministico).
+   - su Apple Silicon **`double` non è supportato** → il kernel è f32-only;
+   - il compute è sincrono (`commit` + `waitUntilCompleted` + read); un `threading.Lock`
+     serializza le chiamate; 2 run sono **bit-identici** (deterministico).
+ - **Vulkan / wgpu (scoperti a caro prezzo)**:
+   - l'API wgpu 0.32 usa nomi "WebGPU-style" omonimi: `wgpu.gpu.enumerate_adapters_sync()`,
+     `wgpu.gpu.request_adapter_sync(power_preference=...)`, `adapter.request_device_sync()`,
+     `device.create_shader_module(code=...)`, `device.create_compute_pipeline(layout="auto",
+     compute=wgpu.ProgrammableStage(module=..., entry_point="main"))`;
+   - **buffer**: `create_buffer(size=, usage=)` / `create_buffer_with_data(data=, usage=)`
+     (argomenti keyword, NON un descrittore); `create_bind_group(layout=, entries=
+     [wgpu.BindGroupEntry(binding=N, resource=buf)])`; layout via
+     `pipe.get_bind_group_layout(0)`;
+   - **niente tipo `u8`** in WGSL → LUT e output sono `array<u32>` packed `0x00RRGGBB`
+     (1 px = 1 u32), unpackati in numpy `(h,w,3)` al readback; parametri in due buffer
+     uniform (`vec4<f32>` + `vec4<i32>`);
+   - **H2D/D2H**: `queue.write_buffer` richiede `COPY_DST` sul buffer di destinazione
+     (usare `UNIFORM|COPY_DST`); `queue.read_buffer` richiede `COPY_SRC` sul buffer
+     sorgente (usare `STORAGE|COPY_SRC`); `queue.submit([enc.finish()])`;
+   - built-in WGSL `min/max/pow/sqrt/log/log2` (senza suffisso `f`); `var` per
+     variabili mutabili, `let` per costanti; `break` deve essere l'ultima istruzione
+     del blocco;
+   - il compute è sincrono (`submit` + `read_buffer` blocca); un `threading.Lock`
+     serializza le chiamate; 2 run sono **bit-identici** (deterministico, verificato
+     su AMD 780M); la lib nativa `wgpu/resources/*.dll` è nella wheel (bundled via
+     `collect_all(wgpu)` + hook `hook-wgpu.py`).
 - **FMA numpy (critica per la bit-identità)**: `np.square` su array
   complessi è compilato da numpy 2.4 **con FMA** (`re*re - im*im` contratto in
   `fma(re, re, -(im*im))`, dipende dal build SIMD), mentre Numba senza fastmath NON
@@ -267,8 +317,9 @@ da questo registro.
     `<zona>_metal_f32.npy` + determinismo (2 run bit-identici) + Metal~CPUf32 entro la
     varianza f32 intrinseca, stimata `max(2%, 1.5× CPUf32~CUDAf32)` usando il gold
     CUDA f32 come righello della "nube" f32 — a deep-zoom le implementazioni f32
-    (Numba/CUDA/Metal) divergono tra loro per il 10-25% dei pixel di bordo caotico per
-     FMA/contrazione: NON è un difetto (Metal f32 è all'altezza di CUDA f32 e CPU f32).
+    (Numba/CUDA/Metal/Vulkan) divergono tra loro per il 10-25% dei pixel di bordo
+    caotico per FMA/contrazione: NON è un difetto (Metal/Vulkan f32 sono all'altezza
+    di CUDA f32 e CPU f32).
 - **Associatività IEEE (bit-identità)**: riscrivere un'espressione numpy può
   cambiare gli arrotondamenti — `cx + half*X/s` NON è bit-identico a
   `cx + half*(X/s)` (l'ordine di `*` e `/` conta). Per restare bit-identici

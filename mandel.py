@@ -1,11 +1,41 @@
 # ============================================================================
 # Insieme di Mandelbrot - visualizzatore interattivo
-# VERSIONE: 5.5.0
+# VERSIONE: 5.6.0
 # ----------------------------------------------------------------------------
 # REGOLA: ogni modifica incrementa la versione e aggiunge una voce qui sotto
 # (formato: versione - data - descrizione modifiche).
 #
 # STORICO:
+# 5.6.0 - 2026-09-02
+#   - NUOVO BACKEND GPU VULKAN (wgpu / wgpu-native, cross-platform): quarto
+#     motore selezionabile accanto a CPU, CUDA (NVIDIA) e Metal (Apple
+#     Silicon), per usare GPU AMD/NVIDIA/Intel anche dove CuPy/PyOpenGL non
+#     arrivano (es. iGPU AMD su Windows). f32-ONLY (come Metal: la f64 su GPU
+#     consumer e' lenta e qui inutile). Rilevato all'avvio: se wgpu e'
+#     installato e c'e' un adapter GPU, il backend e' disponibile; altrimenti
+#     l'app degrada a CPU/CUDA/Metal come prima.
+#   - UI "Motore": i due checkbutton CPU/GPU diventano 4 RADIO (CPU, CUDA,
+#     Metal, Vulkan); i backend non disponibili restano visibili ma
+#     DISABILITATI (grigi). Il backend attivo e' persistito in config per
+#     nome ("cpu"/"cuda"/"metal"/"vulkan"); i vecchi valori ("gpu") migrano al
+#     default GPU.
+#   - Kernel WGSL (compute shader): stesso criterio di escape, interior
+#     analitico e coloring (smooth iteration) di CUDA/MSL/CPU -> stessa
+#     immagine a parte 1-qualche ULP sul bordo caotico (limitazione intrinseca
+#     di f32). Vincoli WGSL (vs MSL/CUDA): nessun tipo u8 -> LUT e output sono
+#     array<u32> con colori packed 0x00RRGGBB (1 px = 1 u32), unpackati in
+#     numpy (h,w,3) al readback; parametri in due buffer uniform (vec4<f32>
+#     cx,cy,half e vec4<i32> w,h,mi,pal); LUT = tutte le palette concatenate
+#     in un buffer storage (selezione per indice pal, come CUDA/MSL);
+#     min/max/pow/sqrt/log/log2 sono i built-in WGSL (senza suffisso 'f').
+#   - Dispatch: lo slot GPU "generico" unico e' ORA una scelta tra 4 backend
+#     (CPU/CUDA/Metal/Vulkan) selezionabile a runtime. _ACTIVE (stringa) e'
+#     l'unico stato del motore; il default e' il primo GPU disponibile in
+#     ordine CUDA > Metal > Vulkan, altrimenti CPU. f64 resta solo su CPU e
+#     su CUDA con kernel f64; su Metal/Vulkan il bottone f64 e' disabilitato
+#     (stato dinamico, come prima).
+#   - Build: mandelbrot.spec raccoglie wgpu (collect_all) su Windows/macOS;
+#     l'app resta self-contained (wgpu-native lib bundle dentro la wheel).
 # 5.5.0 - 2026-09-01
 #   - Build dell'app multipiattaforma: aggiunta la build Windows (one-dir)
 #     dist/Mandelbrot/Mandelbrot.exe con GPU CUDA (CuPy) incluso ma runtime
@@ -447,7 +477,7 @@ CONFIG_PATH = os.path.join(os.path.expanduser("~"), "mandelbrot", "config.json")
 BENCH = dict(cx=-0.7499302568795561, cy=-0.015139113925433963, half=5.226737155905588e-05,
              w=960, h=540, secs=8.0)
 
-VERSION = "5.5.0"
+VERSION = "5.6.0"
 
 # ---------------- Palette (LUT 256x3 condivisa CPU/GPU) ----------------
 _FIRE = (
@@ -798,22 +828,232 @@ except Exception:
     _METAL_OK = False
     _METAL_BE = None
 
-# Slot GPU generico: preferisco CUDA (ha f64) se presente, altrimenti Metal.
-# _GPU = lo slot GPU e' disponibile (CUDA o Metal).
-_GPU_BACKEND = "cuda" if _CUDA_OK else ("metal" if _METAL_OK else None)
-_GPU = _GPU_BACKEND is not None
+# ---------------- GPU (Vulkan, wgpu) ----------------
+# Backend Vulkan via wgpu (wgpu-native) per GPU discrete/integrate
+# (AMD/NVIDIA/Intel), cross-platform (Windows/macOS/Linux). f32-ONLY (come
+# Metal: la f64 su GPU consumer e' lenta e qui inutile). Stesso criterio di
+# escape, interior analitico e coloring (smooth iteration) dei kernel
+# CUDA/MSL/CPU -> stessa immagine a parte 1-qualche ULP sul bordo caotico
+# (limitazione intrinseca di f32, NON un difetto).
+# Vincoli WGSL (vs MSL/CUDA):
+#   - nessun tipo u8: LUT e output sono array<u32> con colori packed
+#     0x00RRGGBB (1 px = 1 u32); al readback si unpacka in numpy (h,w,3);
+#   - i parametri vanno in DUE buffer uniform (vec4<f32> = cx,cy,half e
+#     vec4<i32> = w,h,mi,pal); LUT e output sono buffer storage;
+#   - min/max/pow/sqrt/log/log2 sono i built-in WGSL (senza suffisso 'f',
+#     a differenza di MSL che vuole fmin/fmax/fpow/...);
+#   - H2D via queue.write_buffer (buffer persistenti, uso UNIFORM|COPY_DST),
+#     D2H via queue.read_buffer (buffer out uso STORAGE|COPY_SRC);
+#   - un lock serializza le chiamate (compute sincrono: submit + read_buffer).
+def _build_vulkan_wgsl():
+    return r'''
+@group(0) @binding(0) var<storage, read> lut: array<u32>;
+@group(0) @binding(1) var<uniform> p: vec4<f32>;
+@group(0) @binding(2) var<uniform> dim: vec4<i32>;
+@group(0) @binding(3) var<storage, read_write> out: array<u32>;
+
+@compute @workgroup_size(16,16,1)
+fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let col = i32(gid.x);
+    let row = i32(gid.y);
+    let w = dim.x;
+    let h = dim.y;
+    if (col >= w || row >= h) { return; }
+    let cx = p.x;
+    let cy = p.y;
+    let hs = p.z;
+    let mi = dim.z;
+    let pal = dim.w;
+
+    let x0 = cx + hs * (f32(2 * col - w) / f32(w));
+    let y0 = cy + hs * (f32(h) / f32(w)) * (f32(2 * row - h) / f32(h));
+    let ridx = row * w + col;
+
+    // Interior analitico: bulbo periodica-2 + cardioide principale (stesso criterio)
+    if (x0 >= -2.0 && x0 <= 0.4 && y0 >= -1.3 && y0 <= 1.3) {
+        let d2 = (x0 + 1.0) * (x0 + 1.0) + y0 * y0;
+        if (d2 <= 0.0625) { out[ridx] = 0u; return; }
+        let A = 1.0 - 4.0 * x0;
+        let B = -4.0 * y0;
+        let R = sqrt(A * A + B * B);
+        if (R < 2.0 * sqrt(0.5 * (R + A))) { out[ridx] = 0u; return; }
+    }
+
+    let a = cx * cx + (x0 - cx);
+    let two_cx = 2.0 * cx;
+    var wr = -cx;
+    var wi = 0.0;
+    var esc = false;
+    var it = 0;
+    var mag2 = 0.0;
+    for (var i = 0; i < mi; i = i + 1) {
+        if (esc) { break; }
+        let nr = wr * wr - wi * wi + two_cx * wr + a;
+        let ni = two_cx * wi + 2.0 * wr * wi + y0;
+        wr = nr;
+        wi = ni;
+        let zr = wr + cx;
+        mag2 = zr * zr + wi * wi;
+        if (mag2 > 4.0) { esc = true; it = i; }
+    }
+    if (!esc) { out[ridx] = 0u; return; }
+
+    let nu = f32(it) + 1.0 - log2(0.5 * log(mag2));
+    let t = pow(min(1.0, max(0.0, nu / f32(mi))), 0.35);
+    let idx = i32(min(1.0, max(0.0, t)) * 255.0);
+    out[ridx] = lut[pal * 256 + idx];
+}
+'''
+
+
+class VulkanBackend:
+    """Backend Vulkan (wgpu) f32, deterministico (2 run bit-identici).
+    LUT (tutte le palette concatenate, u32 packed 0x00RRGGBB) e output
+    (h*w u32 packed) sono buffer storage; i parametri (cx,cy,half in
+    vec4<f32>; w,h,mi,pal in vec4<i32>) sono due buffer uniform. H2D via
+    queue.write_buffer (buffer persistenti), D2H via queue.read_buffer.
+    Un lock serializza le chiamate (compute sincrono: submit + read_buffer).
+    """
+    TH = 16  # workgroup 16x16 = 256 thread (sotto il max di AMD/NVIDIA/Intel)
+
+    def __init__(self):
+        import wgpu
+        self._w = wgpu
+        if not wgpu.gpu.enumerate_adapters_sync():
+            raise RuntimeError("nessun adapter GPU (Vulkan)")
+        adapter = wgpu.gpu.request_adapter_sync(power_preference="high-performance")
+        if adapter is None:
+            raise RuntimeError("nessun adapter (Vulkan)")
+        self.dev = adapter.request_device_sync()
+        if self.dev is None:
+            raise RuntimeError("device Vulkan fallito")
+        try:
+            self.name = dict(adapter.info).get("device", "GPU")
+        except Exception:
+            self.name = "GPU"
+        self.lut_buf = self._make_lut_buffer()
+        shader = self.dev.create_shader_module(code=_build_vulkan_wgsl())
+        self.pipe = self.dev.create_compute_pipeline(
+            layout="auto",
+            compute=wgpu.ProgrammableStage(module=shader, entry_point="main"))
+        self.layout = self.pipe.get_bind_group_layout(0)
+        uflags = wgpu.BufferUsage.UNIFORM | wgpu.BufferUsage.COPY_DST
+        self.p_buf = self.dev.create_buffer(size=16, usage=uflags)
+        self.dim_buf = self.dev.create_buffer(size=16, usage=uflags)
+        self._out = None
+        self._out_size = 0
+        self._bg = None
+        self._bg_out = None
+        self._lock = threading.Lock()
+
+    def _make_lut_buffer(self):
+        # Tutte le palette concatenate (ordine PALETTES = indice pal), u32
+        # packed 0x00RRGGBB: 1 entry = 1 u32. La selezione per indice pal
+        # avviene nel shader (lut[pal*256 + idx]), come CUDA/MSL.
+        lut = np.empty((len(PALETTES), 256), dtype=np.uint32)
+        for i, (_name, pal) in enumerate(PALETTES.items()):
+            l = make_lut(pal).astype(np.uint32)  # (256,3)
+            lut[i] = l[:, 0] | (l[:, 1] << 8) | (l[:, 2] << 16)
+        data = np.ascontiguousarray(lut).ravel().tobytes()
+        return self.dev.create_buffer_with_data(
+            data=data, usage=self._w.BufferUsage.STORAGE)
+
+    def _out_buf(self, need):
+        if self._out is None or self._out_size < need:
+            self._out = self.dev.create_buffer(
+                size=need,
+                usage=self._w.BufferUsage.STORAGE | self._w.BufferUsage.COPY_SRC)
+            self._out_size = need
+            self._bg = None  # il bind group punta sul buffer vecchio
+        return self._out
+
+    def _ensure_bg(self, out):
+        if self._bg is None or self._bg_out is not out:
+            self._bg = self.dev.create_bind_group(layout=self.layout, entries=[
+                self._w.BindGroupEntry(binding=0, resource=self.lut_buf),
+                self._w.BindGroupEntry(binding=1, resource=self.p_buf),
+                self._w.BindGroupEntry(binding=2, resource=self.dim_buf),
+                self._w.BindGroupEntry(binding=3, resource=out),
+            ])
+            self._bg_out = out
+        return self._bg
+
+    def compute(self, cx, cy, half, w, h, mi, pal=0):
+        need = w * h * 4  # 1 u32 per pixel
+        with self._lock:
+            out = self._out_buf(need)
+            self.dev.queue.write_buffer(
+                self.p_buf, 0, struct.pack('<ffff', cx, cy, half, 0.0))
+            self.dev.queue.write_buffer(
+                self.dim_buf, 0, struct.pack('<iiii', w, h, mi, pal))
+            bg = self._ensure_bg(out)
+            enc = self.dev.create_command_encoder()
+            p = enc.begin_compute_pass()
+            p.set_pipeline(self.pipe)
+            p.set_bind_group(0, bg)
+            p.dispatch_workgroups(
+                (w + self.TH - 1) // self.TH, (h + self.TH - 1) // self.TH, 1)
+            p.end()
+            self.dev.queue.submit([enc.finish()])
+            mv = self.dev.queue.read_buffer(out, 0, w * h * 4)
+            u = np.frombuffer(mv, dtype=np.uint32).reshape(h, w)
+            rgb = np.empty((h, w, 3), dtype=np.uint8)
+            rgb[:, :, 0] = (u & 0xFF)
+            rgb[:, :, 1] = (u >> 8) & 0xFF
+            rgb[:, :, 2] = (u >> 16) & 0xFF
+            return rgb
+
+
+_VULKAN_OK = False
+_VULKAN_BE = None
+try:
+    import wgpu  # wgpu-native: cross-platform (Windows/macOS/Linux)
+    _VULKAN_BE = VulkanBackend()
+    _VULKAN_OK = True
+except Exception:
+    _VULKAN_OK = False
+    _VULKAN_BE = None
+
+# ---------------- Selezione backend (v5.6.0) ----------------
+# Quattro backend selezionabili a runtime:
+#   cpu     - CPU (Numba/numpy), sempre disponibile, f32 e f64
+#   cuda    - CUDA (NVIDIA, CuPy), f32 (+ f64 se il kernel f64 e' compilato)
+#   metal   - Metal (Apple Silicon, pyobjc), f32-only
+#   vulkan  - Vulkan (wgpu), f32-only, AMD/NVIDIA/Intel cross-platform
+# Ogni backend e' rilevato all'avvio (_CUDA_OK/_METAL_OK/_VULKAN_OK).
+# _BACKENDS_OK e' l'elenco di quelli disponibili (ordine di preferenza);
+# _ACTIVE e' il backend corrente (stringa); il default e' il primo GPU
+# disponibile in ordine CUDA > Metal > Vulkan, altrimenti CPU.
+_BACKENDS_OK = []
+if _CUDA_OK:
+    _BACKENDS_OK.append("cuda")
+if _METAL_OK:
+    _BACKENDS_OK.append("metal")
+if _VULKAN_OK:
+    _BACKENDS_OK.append("vulkan")
+_BACKENDS_OK.append("cpu")
+
+def _backend_ok(name):
+    return name in _BACKENDS_OK
+
+def _default_backend():
+    return _BACKENDS_OK[0]
+
+_ACTIVE = _default_backend()
+# _GPU = c'e' almeno un backend GPU disponibile (usato per il warmup all'avvio).
+_GPU = _ACTIVE != "cpu"
 
 def _gpu_supports_f64():
-    # f64 solo su CUDA con kernel f64 compilato; Metal e' f32-only (no 'double').
-    return _GPU_BACKEND == "cuda" and _KERNEL_F64 is not None
+    # f64 solo su CUDA con kernel f64 compilato; Metal e Vulkan sono f32-only.
+    return _ACTIVE == "cuda" and _KERNEL_F64 is not None
 
 _PREC = "f32"
 
 def set_prec(p):
     global _PREC
-    # v5.4.0: la guardia f64 vale per lo slot GPU corrente (Metal e' f32-only;
-    # CUDA senza kernel f64). La CPU supporta sempre sia f32 sia f64.
-    if p == "f64" and _USE_GPU and not _gpu_supports_f64():
+    # v5.6.0: la guardia f64 vale per il backend corrente (Metal/Vulkan sono
+    # f32-only; CUDA senza kernel f64). La CPU supporta sempre sia f32 sia f64.
+    if p == "f64" and _ACTIVE != "cpu" and not _gpu_supports_f64():
         return False
     if p in ("f32", "f64"):
         _PREC = p
@@ -883,11 +1123,20 @@ def _compute_gpu_metal(cx, cy, half, w, h, mi, prec=None):
     rgb = _METAL_BE.compute(cx, cy, half, w, h, mi, pal=list(PALETTES).index(_PALETTE))
     return Image.fromarray(rgb)
 
+def _compute_gpu_vulkan(cx, cy, half, w, h, mi, prec=None):
+    # Vulkan (wgpu) e' f32-only (stessa scelta di Metal).
+    if prec == "f64":
+        raise ValueError("Vulkan: solo f32")
+    rgb = _VULKAN_BE.compute(cx, cy, half, w, h, mi, pal=list(PALETTES).index(_PALETTE))
+    return Image.fromarray(rgb)
+
 def compute_gpu(cx, cy, half, w, h, mi, buf=None, prec=None):
-    # v5.4.0: dispatcher dello slot GPU generico (CUDA o Metal). 'buf' e'
-    # usato solo dal percorso CUDA (Metal usa il proprio buffer di output).
-    if _GPU_BACKEND == "metal":
+    # v5.6.0: dispatcher del backend GPU attivo (CUDA / Metal / Vulkan).
+    # 'buf' e' usato solo dal percorso CUDA (Metal/Vulkan usano i propri buffer).
+    if _ACTIVE == "metal":
         return _compute_gpu_metal(cx, cy, half, w, h, mi, prec=prec)
+    if _ACTIVE == "vulkan":
+        return _compute_gpu_vulkan(cx, cy, half, w, h, mi, prec=prec)
     return _compute_gpu_cuda(cx, cy, half, w, h, mi, buf=buf, prec=prec)
 
 # ---------------- CPU (fallback) ----------------
@@ -1184,25 +1433,22 @@ def compute_cpu(cx, cy, half, w, h, mi, my_gen=0, prec="f64"):
     return Image.fromarray(rgb)
 
 # ---------------- Dispatch backend ----------------
-_USE_GPU = _GPU
+# v5.6.0: _ACTIVE (stringa) e' l'unico stato del motore (cpu/cuda/metal/vulkan).
 
 def backend():
-    # v5.4.0: la precisione (f32/f64) e' comune ai due motori; lo slot GPU e'
-    # generico (CUDA o Metal). Metal e' f32-only.
-    if not _USE_GPU:
-        return "CPU " + _PREC
-    name = "Metal" if _GPU_BACKEND == "metal" else "CUDA"
-    return name + " " + _PREC
+    # v5.6.0: 4 backend selezionabili; la precisione (f32/f64) e' comune.
+    # Metal/Vulkan sono f32-only, CUDA f32 (+f64 se il kernel e' compilato).
+    return _ACTIVE.upper() + " " + _PREC if _ACTIVE != "cpu" else "CPU " + _PREC
 
 def compute(cx, cy, half, w, h, mi, buf=None, prec=None, my_gen=0):
-    if _USE_GPU:
+    if _ACTIVE != "cpu":
         return compute_gpu(cx, cy, half, w, h, mi, buf=buf, prec=prec)
     # v5.3.0: la precisione selezionata (f32/f64) vale anche per la CPU.
     return compute_cpu(cx, cy, half, w, h, mi, my_gen=my_gen, prec=prec or _PREC)
 
-# v4.16.0: warmup GPU in background all'avvio: init context CUDA, module load
-# e prime allocazioni (buffer device + pinned) pagati FUORI dal primo render
-# reale (che senza warmup e' 8-17 ms piu' lento).
+# v4.16.0 / v5.6.0: warmup GPU in background all'avvio: init del backend GPU
+# default (CUDA/Metal/Vulkan), compilazione shader e prime allocazione pagati
+# FUORI dal primo render reale (che senza warmup e' 8-17 ms piu' lento).
 def _gpu_warmup():
     try:
         compute_gpu(CX0, CY0, HALF0, 64, 64, 64, prec="f32")
@@ -1256,16 +1502,19 @@ class MandelbrotApp:
         bk = tk.Frame(self.ctl)
         bk.pack(side="left", padx=(8, 12))
         tk.Label(bk, text="Motore:").pack(side="left")
-        self.cpu_btn = tk.Checkbutton(bk, text="CPU", command=lambda: self.set_backend("cpu"))
-        self.cpu_btn.pack(side="left", padx=2, pady=3)
-        # v5.4.0: lo slot GPU e' generico (CUDA o Metal, rilevato all'avvio).
-        self.gpu_btn = tk.Checkbutton(bk, text="GPU", command=lambda: self.set_backend("gpu"))
-        self.gpu_btn.pack(side="left", padx=2, pady=3)
-        if _GPU:
-            self.gpu_btn.select()
-        else:
-            self.gpu_btn.config(state="disabled")
-            self.cpu_btn.select()
+        # v5.6.0: 4 radio (CPU/CUDA/Metal/Vulkan) nel MESSIMO frame = gruppo
+        # radio unico (Tkinter li raggruppa da solo, senza 'variable'). I
+        # backend non disponibili restano visibili ma DISABILITATI (grigi).
+        self.backend_btns = {}
+        for _be in ("cpu", "cuda", "metal", "vulkan"):
+            _b = tk.Radiobutton(bk, text=_be.capitalize(), value=_be,
+                               command=lambda b=_be: self.set_backend(b))
+            _b.pack(side="left", padx=2, pady=3)
+            self.backend_btns[_be] = _b
+        for _be, _b in self.backend_btns.items():
+            if not _backend_ok(_be):
+                _b.config(state="disabled")
+        self.backend_btns[_ACTIVE].select()
         pl = tk.Frame(self.ctl)
         pl.pack(side="left", padx=12)
         tk.Label(pl, text="Palette:").pack(side="left")
@@ -1373,14 +1622,15 @@ class MandelbrotApp:
         self.pal_btns[name].select()
 
     def _select_backend(self, be):
-        global _USE_GPU
-        # v5.4.0: lo slot GPU e' generico ("gpu" = CUDA o Metal, rilevato all'avvio).
-        if be == "gpu" and not _GPU:
+        global _ACTIVE
+        # v5.6.0: 4 backend (cpu/cuda/metal/vulkan); selezionabile solo se
+        # disponibile all'avvio (gli altri restano grigi/disabilitati).
+        if not _backend_ok(be):
             return False
-        _USE_GPU = (be == "gpu")
-        self.cpu_btn.deselect()
-        self.gpu_btn.deselect()
-        (self.cpu_btn if be == "cpu" else self.gpu_btn).select()
+        _ACTIVE = be
+        for b in self.backend_btns.values():
+            b.deselect()
+        self.backend_btns[be].select()
         return True
 
     def _select_precision(self, p):
@@ -1396,7 +1646,7 @@ class MandelbrotApp:
         # Metal e' f32-only, CUDA senza kernel f64 non fa f64. Con CPU f32/f64
         # sono sempre selezionabili. Se la precisione corrente non e' piu'
         # disponibile si torna a f32; il bottone selezionato riflette _PREC.
-        f64_ok = (not _USE_GPU) or _gpu_supports_f64()
+        f64_ok = (_ACTIVE == "cpu") or _gpu_supports_f64()
         if not f64_ok and _PREC == "f64":
             set_prec("f32")
         self.f64_btn.config(state="normal" if f64_ok else "disabled")
@@ -1541,7 +1791,7 @@ class MandelbrotApp:
         self.mi_minus.config(state="disabled")
         self.mi_plus.config(state="disabled")
         self._select_palette("fuoco")
-        self._select_backend("gpu" if _GPU else "cpu")
+        self._select_backend(_default_backend())
         self._select_precision("f32")
         self._sync_precision_buttons()
         self._refresh_title()
@@ -1726,9 +1976,9 @@ class MandelbrotApp:
         # MI auto); la vista si salva solo col file zona ('Salva zona').
         # NB: view_file NON e' persistito (v5.1.1): 'Salva zona' chiede sempre
         # il nome finche' non si carica/salva una zona in quella sessione.
-        # v5.4.0: lo slot GPU e' generico -> salvo "gpu"/"cpu" (non piu' "cuda").
+        # v5.6.0: salvo il backend ATTIVO per nome (cpu/cuda/metal/vulkan).
         c = dict(precision=_PREC, palette=_PALETTE,
-                 backend=("gpu" if _USE_GPU else "cpu"),
+                 backend=_ACTIVE,
                  bench=dict(self.bench))
         try:
             d = os.path.dirname(CONFIG_PATH)
@@ -1755,12 +2005,13 @@ class MandelbrotApp:
         # il nome finche' non si carica/salva una zona in questa sessione.
         self._load_bench(c.get("bench"))
         self._select_palette(c.get("palette", "fuoco"))
-        # v5.4.0: "cuda" (config v<=5.3.0) e' mappato su "gpu".
-        be = c.get("backend", "gpu" if _GPU else "cpu")
-        if be == "cuda":
-            be = "gpu"
-        if be == "gpu" and not _GPU:
-            be = "cpu"
+        # v5.6.0: il backend e' per nome (cpu/cuda/metal/vulkan); i vecchi
+        # valori "gpu" (v5.4.x/5.5.0) migrano al default GPU. _select_backend
+        # scarta (restituendo False) i backend non disponibili, restando sul
+        # default di avvio (che e' sempre disponibile).
+        be = c.get("backend", _default_backend())
+        if be == "gpu":
+            be = _default_backend()
         self._select_backend(be)
         # la precisione va DOPO il motore: la disponibilita' di f64 dipende
         # dallo slot GPU corrente (set_prec la rifiuta se lo slot non la fa).
@@ -1920,9 +2171,9 @@ class MandelbrotApp:
         mi = auto_mi(b["half"])
         need = b["w"] * b["h"] * 3
         bench_buf = None
-        # v5.4.0: il buffer di lavoro serve solo al percorso CUDA (Metal usa
-        # il proprio buffer, CPU la memoria numpy).
-        if _GPU_BACKEND == "cuda":
+        # v5.6.0: il buffer di lavoro serve solo al percorso CUDA (Metal/Vulkan
+        # usano il proprio buffer, CPU la memoria numpy).
+        if _ACTIVE == "cuda":
             try:
                 import cupy as cp
                 bench_buf = cp.empty((need,), dtype=cp.uint8)
@@ -1930,7 +2181,7 @@ class MandelbrotApp:
                 bench_buf = None
         def render():
             # v5.1.0: modalita' CORRENTE (motore+precisione selezionati), non
-            # piu' CUDA f32 fisso. compute() dispatcha su _USE_GPU e usa
+            # piu' CUDA f32 fisso. compute() dispatcha su _ACTIVE e usa
             # _PREC (GPU) / f64 (CPU); my_gen=0 -> nessuna cancellazione.
             return compute(b["cx"], b["cy"], b["half"], b["w"], b["h"], mi,
                            buf=bench_buf)
