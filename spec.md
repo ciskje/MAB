@@ -154,7 +154,11 @@ Sotto solo scarti + gotcha API.
   piccoli per la slack di `_BUF`). Parametro `row0` (v6.2): prima riga della
   banda per lo split multi-GPU (griglia dimensionata sulla banda, indici su
   w/h assoluti → partizionare non cambia un pixel); lancio unico
-  `_cuda_launch_band` per single e split.
+  `_cuda_launch_band` per single e split. Parity automatica (v6.2.1):
+  dopo la calibrazione, split e single sulla vista bench devono essere
+  bit-identici (`_cuda_split_parity`); in caso di diff lo split si
+  auto-disattiva e `Entrambe` viene rifiutata con la % (rapporto + esito
+  in Help > Informazioni, `_cuda_split_diag`).
 - Scalari = array numpy size-1; indice palette preallocato (`_PAL_IDX`);
   `np.asarray` su array CuPy vietato → `.get()`.
 - D2H pinned: `PinnedMemory(size)` + `runtime.memcpy(..., memcpyDeviceToHost)`

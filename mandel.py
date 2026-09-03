@@ -1,11 +1,17 @@
 # ============================================================================
 # Insieme di Mandelbrot - visualizzatore interattivo
-# VERSIONE: 6.2
+# VERSIONE: 6.2.1
 # ----------------------------------------------------------------------------
 # REGOLA: ogni modifica incrementa la versione e aggiunge una voce qui sotto
 # (formato: versione - data - descrizione modifiche).
 #
 # STORICO:
+# 6.2.1 - 2026-09-03
+#   - Split CUDA: prova di parity automatica (split vs single bit-identici
+#     sulla vista bench, dopo la calibrazione). In caso di differenza lo
+#     split si auto-disattiva e la selezione Entrambe viene rifiutata con
+#     la % di diff; rapporto + esito visibili in Help > Informazioni.
+#     Indagine sulla seam al confine delle bande.
 # 6.2 - 2026-09-03
 #   - Split CUDA su 2 GPU (dropdown gpu1/gpu2/Entrambe): bande orizzontali
 #     con rapporto auto-calibrato (probe cronometrate a warmup fatto,
@@ -809,13 +815,14 @@ BENCH_REF = (
     ("5070 Ti CUDA (storico)", 350.0),
 )
 
-VERSION = "6.2"
+VERSION = "6.2.1"
 
 # Ultime 10 modifiche di versione per Help -> "Novità recenti..."
 # (versione, data, descrizione breve). Fonte embedded: i commenti STORICO
 # non sopravvivono alla build PyInstaller, quindi il dialog legge da qui.
 # REGOLA BUMP: aggiungere la voce nuova in testa e tenere max 10.
 HISTORY = (
+    ("6.2.1", "2026-09-03", "Split CUDA: parity automatica split-vs-single con fail-safe."),
     ("6.2", "2026-09-03", "Split CUDA su 2 GPU con rapporto auto-calibrato (gpu1/gpu2/entrambe)."),
     ("6.1.2", "2026-09-03", "Reset riporta la scala a 1x1."),
     ("6.1.1", "2026-09-03", "Benchmark in esclusiva GPU anche vs ricalcolo NxN (conteggi stabili)."),
@@ -825,7 +832,6 @@ HISTORY = (
     ("5.11.0", "2026-09-03", "Ricalcola unico con scala 1x1/2x2/4x4/8x8 e guardia memoria."),
     ("5.10.2", "2026-09-03", "Preview draft a 1/8 solo su CPU (GPU a 1/4)."),
     ("5.10.1", "2026-09-03", "Rinomina Foto NxN in Ricalcola NxN."),
-    ("5.10.0", "2026-09-03", "Foto 2x2 + Foto 4x4 (NxN) e pulsante Ricalcola."),
 )
 
 # ---------------- Palette (LUT 256x3 condivisa CPU/GPU) ----------------
@@ -1152,15 +1158,16 @@ def _cuda_calibrate_split():
             ts.append(max((time.perf_counter() - t0) / 3, 1e-9))
         r = (1.0 / ts[0]) / (1.0 / ts[0] + 1.0 / ts[1])
         _CUDA_SPLIT_RATIO = min(0.9, max(0.1, r))
+        # v6.2.1: subito dopo, parity split-vs-single (fail-safe automatico).
+        _cuda_split_parity()
     except Exception:
         pass
     finally:
         _CUDA_SPLIT_CALIBRATING = False
 
-def _compute_gpu_cuda_split(cx, cy, half, w, h, mi, prec=None):
-    """Frame spartito sulle 2 GPU (bande orizzontali per rapporto calibrato),
-    cucito in un unico host array pinned. Errore su una banda = eccezione
-    (il chiamante ricade sul single)."""
+def _compute_gpu_cuda_split_arr(cx, cy, half, w, h, mi, prec=None):
+    """Nucleo dello split: ritorna la vista ndarray (h,w,3) sul pinned host
+    (il chiamante la copia se la trattiene)."""
     devs = _cuda_split_devs()
     r = min(0.9, max(0.1, _CUDA_SPLIT_RATIO))
     h0 = (int(round(h * r)) // 16) * 16
@@ -1202,7 +1209,73 @@ def _compute_gpu_cuda_split(cx, cy, half, w, h, mi, prec=None):
         t.join()
     if errs:
         raise errs[0]
-    return Image.fromarray(host.reshape((h, w, 3)))
+    return np.asarray(host.reshape((h, w, 3)))
+
+def _compute_gpu_cuda_split(cx, cy, half, w, h, mi, prec=None):
+    """Frame spartito sulle 2 GPU (bande orizzontali per rapporto calibrato),
+    cucito in un unico host array pinned. Errore su una banda = eccezione
+    (il chiamante ricade sul single)."""
+    return Image.fromarray(
+        _compute_gpu_cuda_split_arr(cx, cy, half, w, h, mi, prec=prec))
+
+def _cuda_render_array(dev, cx, cy, half, w, h, mi):
+    """Render single-device su dev, ritorna ndarray uint8 (h,w,3) fresco."""
+    pal = list(PALETTES).index(_PALETTE)
+    use64 = (_PREC == "f64") and (_KERNEL_F64 is not None)
+    fdt = np.float64 if use64 else np.float32
+    with cp.cuda.Device(dev):
+        out = cp.empty((w * h * 3,), dtype=cp.uint8)
+        _cuda_launch_band(dev, out, 0, h, w, h, mi, pal, use64, fdt,
+                          cx, cy, half)
+        return out.get().reshape((h, w, 3)).copy()
+
+# v6.2.1: esito parity split-vs-single (None = non ancora misurata).
+_CUDA_SPLIT_PARITY_OK = None
+_CUDA_SPLIT_PARITY_DIFF = 0.0
+
+def _cuda_split_diag():
+    """Riga diagnostica per Help > Informazioni (rapporto + parity)."""
+    try:
+        r = min(0.9, max(0.1, _CUDA_SPLIT_RATIO))
+        n0 = _cuda_short_name(_CUDA_DEVICES[0][1])
+        n1 = _cuda_short_name(_CUDA_DEVICES[1][1])
+        base = "%s %d%% / %s %d%%" % (n0, round(r * 100),
+                                      n1, 100 - round(r * 100))
+    except Exception:
+        return "non disponibile"
+    if _CUDA_SPLIT_PARITY_OK is None:
+        return base + " (parity in corso...)"
+    if _CUDA_SPLIT_PARITY_OK:
+        return base + " (parity OK: split bit-identico al single)"
+    return base + (" (parity FALLITA: diff %.1f%%, split auto-disattivato)"
+                   % (_CUDA_SPLIT_PARITY_DIFF * 100.0))
+
+def _cuda_split_parity():
+    """Split e single sulla stessa vista devono essere bit-identici (ogni
+    pixel e' indipendente). Probe 480x270 sulla vista bench: in caso di
+    differenza lo split si auto-disattiva (fail-safe). Background."""
+    global _CUDA_SPLIT_PARITY_OK, _CUDA_SPLIT_PARITY_DIFF, _CUDA_SPLIT_ON
+    devs = _cuda_split_devs()
+    if devs is None:
+        return
+    try:
+        b = BENCH
+        mi = auto_mi(b["half"])
+        w, h = 480, 270
+        a = _compute_gpu_cuda_split_arr(b["cx"], b["cy"], b["half"],
+                                        w, h, mi).copy()
+        c = _cuda_render_array(devs[0], b["cx"], b["cy"], b["half"],
+                               w, h, mi)
+        if a.shape != c.shape:
+            raise ValueError("shape %s vs %s" % (a.shape, c.shape))
+        diff = float((a != c).any(axis=-1).mean())
+        _CUDA_SPLIT_PARITY_DIFF = diff
+        _CUDA_SPLIT_PARITY_OK = (diff == 0.0)
+        if not _CUDA_SPLIT_PARITY_OK:
+            _CUDA_SPLIT_ON = False
+            _HW_CACHE.pop("cuda", None)
+    except Exception:
+        pass
 
 # ---------------- GPU (Metal, Apple Silicon) ----------------
 # Backend Metal per Apple GPU (M1...). Metal su Apple Silicon NON supporta
@@ -2469,6 +2542,10 @@ class MandelbrotApp:
         # v5.9.5: diagnostica CPU/Numba (perche' single-core?).
         tk.Label(body, text="CPU: " + _numba_diag(), wraplength=460,
                  justify="left").pack(anchor="w", pady=(10, 0))
+        # v6.2.1: diagnostica split CUDA (rapporto + esito parity).
+        if _CUDA_OK and len(_CUDA_DEVICES) >= 2:
+            tk.Label(body, text="Split: " + _cuda_split_diag(), wraplength=460,
+                     justify="left").pack(anchor="w")
         def chiudi(_e=None):
             win._annullato = False
             win.destroy()
@@ -2753,6 +2830,14 @@ class MandelbrotApp:
         # v6.2: "Entrambe (split...)" attiva lo split sulle prime 2 CUDA
         # (il benchmark resta comunque sul device singolo _CUDA_DEV).
         if _ACTIVE == "cuda" and str(label).startswith("Entrambe"):
+            # v6.2.1: se la parity ha bocciato lo split, rifiuto esplicito.
+            if _CUDA_SPLIT_PARITY_OK is False:
+                self._sync_gpu_menu()
+                self.status.config(
+                    text=("split disabilitato: parity fallita (diff %.1f%%) — "
+                          "uso gpu1/gpu2 singole" % (_CUDA_SPLIT_PARITY_DIFF * 100.0)),
+                    foreground=ERR_FG)
+                return
             if set_cuda_split(True):
                 self._refresh_title()
                 self._sync_gpu_menu()
