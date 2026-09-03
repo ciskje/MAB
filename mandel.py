@@ -7,9 +7,9 @@
 #
 # STORICO:
 # 6.2.5 - 2026-09-03
-#   - Niente calibrazione split all'avvio (era lenta e rumorosa); ora solo
-#     su richiesta col pulsante ricampiona. Dropdown ratio fisso:
-#     1/3 2/3, 50/50, 2/3 1/3. GPU selettore spostato nella 2a riga.
+#   - Niente calibrazione split all'avvio; solo su richiesta (pulsante
+#     ricampiona). Dropdown ratio fisso (33% 66% / 50% 50% / 66% 33%) +
+#     label corrente nel frame GPU. GPU selettore nella 2a riga.
 # 6.2.4 - 2026-09-03
 #   - Benchmark usa lo split (Entrambe) quando attivo: non passa piu' buf
 #     dedicato, dispatcha sullo stesso percorso del render interattivo.
