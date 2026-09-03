@@ -1,11 +1,13 @@
 # ============================================================================
 # Insieme di Mandelbrot - visualizzatore interattivo
-# VERSIONE: 6.1.1
+# VERSIONE: 6.1.2
 # ----------------------------------------------------------------------------
 # REGOLA: ogni modifica incrementa la versione e aggiunge una voce qui sotto
 # (formato: versione - data - descrizione modifiche).
 #
 # STORICO:
+# 6.1.2 - 2026-09-03
+#   - Reset riporta anche la scala a 1x1 (era persistente dopo il reset).
 # 6.1.1 - 2026-09-03
 #   - Benchmark sempre in esclusiva GPU (era solo vs worker interattivo):
 #     il ricalcolo NxN concorrente sullo stesso device crollava il conteggio
@@ -781,13 +783,14 @@ BENCH_REF = (
     ("5070 Ti CUDA (storico)", 350.0),
 )
 
-VERSION = "6.1.1"
+VERSION = "6.1.2"
 
 # Ultime 10 modifiche di versione per Help -> "Novità recenti..."
 # (versione, data, descrizione breve). Fonte embedded: i commenti STORICO
 # non sopravvivono alla build PyInstaller, quindi il dialog legge da qui.
 # REGOLA BUMP: aggiungere la voce nuova in testa e tenere max 10.
 HISTORY = (
+    ("6.1.2", "2026-09-03", "Reset riporta la scala a 1x1."),
     ("6.1.1", "2026-09-03", "Benchmark in esclusiva GPU anche vs ricalcolo NxN (conteggi stabili)."),
     ("6.1", "2026-09-03", "Ricalcolo NxN: memoria misurata davvero (VRAM/RAM), via tetto statico."),
     ("6.0", "2026-09-03", "Ricalcola prima del dropdown, scala persistente con ricalcolo immediato."),
@@ -797,7 +800,6 @@ HISTORY = (
     ("5.10.1", "2026-09-03", "Rinomina Foto NxN in Ricalcola NxN."),
     ("5.10.0", "2026-09-03", "Foto 2x2 + Foto 4x4 (NxN) e pulsante Ricalcola."),
     ("5.9.8", "2026-09-03", "Zoom-out macOS: tasti globali + click destro x0.5."),
-    ("5.9.7", "2026-09-03", "Bugfix Foto: typo nome pulsante, ora funziona."),
 )
 
 # ---------------- Palette (LUT 256x3 condivisa CPU/GPU) ----------------
@@ -2606,6 +2608,9 @@ class MandelbrotApp:
         self.mi_auto_var.set(True)
         self.mi_minus.config(state="disabled")
         self.mi_plus.config(state="disabled")
+        # v6.1.2: il reset riporta la scala a 1x1 (via trace parte un
+        # ricalcolo intermedio, poi collassa sul request_render finale).
+        self.recalc_var.set("1x1")
         self._select_palette("fuoco")
         self._select_backend(_default_backend())
         self._select_cuda_device(0)

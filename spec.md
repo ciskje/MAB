@@ -295,7 +295,7 @@ Sotto solo scarti + gotcha API.
   divisore `#8a8a8a`; grafico: griglia `#a0a0a0`, assi/divisore `#8a8a8a`.
   Solo UI, nessun effetto sul rendering.
 - Reset: vista + `mi = 200` + auto + palette `fuoco` + backend default +
-  device CUDA 0 + adapter Vulkan 0 + f32. Non tocca benchmark, `view_file`,
+  device CUDA 0 + adapter Vulkan 0 + f32 + scala `1x1`. Non tocca benchmark, `view_file`,
   cache hardware.
 
 ## 9. File I/O
