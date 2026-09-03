@@ -97,16 +97,15 @@ Registro `PALETTES` (fonte unica): ordine = indice kernel (0 fuoco, 1 ghiaccio,
   orizzontali sulle prime 2 CUDA con rapporto auto-calibrato
   (`_cuda_calibrate_split`: probe 480x270 sulla vista bench dopo warmup,
   quota = velocità relativa, clamp 10/90, persistita in `cuda_split_ratio`);
-  kernel con offset `row0` (bit-identico al single), buffer device separati
-  per banda (`_CUDA_SPLIT_BUFS`), cucitura su host pinned, fallback single
-  in errore; sotto 32 px di altezza resta single (soglia tecnica). Render
-  interattivi, full e foto NxN usano lo split; benchmark e warmup singolo
-  restano sul device scelto (`buf` dedicato = mai split). Selezione singola
-  esce dallo split; reset torna a gpu1. Titolo/stato con entrambi i nomi
-  (`hw_name`, tranne durante il bench che mostra il device benchato).
-  Selezioni persistite (`cuda_device`, `cuda_split`, `cuda_split_ratio`,
-  `vulkan_adapter`). Vulkan (v5.9.2): adapter fisici backend Vulkan da
-  `_VULKAN_ADAPTERS` (deduplicati per vendor/device, default = ex
+   kernel con offset `row0` (bit-identico al single), buffer device separati
+   per banda (`_CUDA_SPLIT_BUFS`), cucitura su host pinned, fallback single
+   in errore; sotto 32 px di altezza resta single (soglia tecnica). Render
+   interattivi, full, foto NxN e benchmark (v6.2.4) usano lo split;
+   warmup resta sul device scelto. Selezione singola esce dallo split;
+   reset torna a gpu1. Titolo/stato con entrambi i nomi (`hw_name`).
+   Selezioni persistite (`cuda_device`, `cuda_split`, `cuda_split_ratio`,
+   `vulkan_adapter`). Vulkan (v5.9.2): adapter fisici backend Vulkan da
+   `_VULKAN_ADAPTERS` (deduplicati per vendor/device, default = ex
   high-performance); cambio via `VulkanBackend.select_adapter()` (ricrea
   risorse device-bound sotto lock); warmup 64x64 in background sul nuovo
   device/adapter se il motore è attivo.
@@ -335,11 +334,11 @@ Sotto solo scarti + gotcha API.
 - Esegue nel modo corrente (motore + f32/f64 di toolbar, GPU/adapter
   selezionato) ma SEMPRE 1x1 fisso (960x540 da config, mai NxN: la scala
   persistente non tocca il bench); CUDA usa buffer proprio (allocato sul
-  device scelto), Metal/Vulkan output proprio, CPU memoria numpy. Per gli
-  8 s ha la GPU in esclusiva (worker in pausa E ricalcolo NxN sospeso, §7);
-  bench sempre 1x1 sul device singolo selezionato (mai split, storici
-  confrontabili); se il device è occupato/in reset il dialog
-  FALLITO lo segnala con hint (riprovare o riavviare).
+   device scelto), Metal/Vulkan output proprio, CPU memoria numpy. Per gli
+   8 s ha la GPU in esclusiva (worker in pausa E ricalcolo NxN sospeso, §7);
+   bench sempre 1x1, usa lo split se attivo (v6.2.4, storici confrontabili
+   a parita' di selezione); se il device e' occupato/in reset il dialog
+   FALLITO lo segnala con hint (riprovare o riavviare).
 - Report: dialog con `rendering/s` grande (42 pt, `#2ea44f`), statistiche
   (n. rendering, ms/render), grafico + griglia parametri (riga `Hardware` da
   `hw_name()`); errore → `BENCHMARK FALLITO` + dettaglio (`#e5534b`).

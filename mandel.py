@@ -1,11 +1,15 @@
 # ============================================================================
 # Insieme di Mandelbrot - visualizzatore interattivo
-# VERSIONE: 6.2.3
+# VERSIONE: 6.2.4
 # ----------------------------------------------------------------------------
 # REGOLA: ogni modifica incrementa la versione e aggiunge una voce qui sotto
 # (formato: versione - data - descrizione modifiche).
 #
 # STORICO:
+# 6.2.4 - 2026-09-03
+#   - Benchmark usa lo split (Entrambe) quando attivo: non passa piu' buf
+#     dedicato, dispatcha sullo stesso percorso del render interattivo.
+#     hw_name mostra entrambe le GPU anche durante il bench.
 # 6.2.3 - 2026-09-03
 #   - Fix split CUDA (seam): kernel scriveva a indici assoluti
 #     (row0+ty) in buffer locali alla banda -> OOB. Ora: out_row=ty
@@ -826,13 +830,14 @@ BENCH_REF = (
     ("5070 Ti CUDA (storico)", 350.0),
 )
 
-VERSION = "6.2.3"
+VERSION = "6.2.4"
 
 # Ultime 10 modifiche di versione per Help -> "Novità recenti..."
 # (versione, data, descrizione breve). Fonte embedded: i commenti STORICO
 # non sopravvivono alla build PyInstaller, quindi il dialog legge da qui.
 # REGOLA BUMP: aggiungere la voce nuova in testa e tenere max 10.
 HISTORY = (
+    ("6.2.4", "2026-09-03", "Benchmark usa lo split (Entrambe) quando attivo, come il render."),
     ("6.2.3", "2026-09-03", "Fix split CUDA: output locale alla banda (row0 solo per il calcolo)."),
     ("6.2.2", "2026-09-03", "Parity split con pattern-match sulla banda 2 (indagine seam)."),
     ("6.2.1", "2026-09-03", "Split CUDA: parity automatica split-vs-single con fail-safe."),
@@ -842,7 +847,6 @@ HISTORY = (
     ("6.1", "2026-09-03", "Ricalcolo NxN: memoria misurata davvero (VRAM/RAM), via tetto statico."),
     ("6.0", "2026-09-03", "Ricalcola prima del dropdown, scala persistente con ricalcolo immediato."),
     ("5.11.1", "2026-09-03", "Bugfix CUDA: guardia riga nel kernel (no piu' illegal access su NxN grande)."),
-    ("5.11.0", "2026-09-03", "Ricalcola unico con scala 1x1/2x2/4x4/8x8 e guardia memoria."),
 )
 
 # ---------------- Palette (LUT 256x3 condivisa CPU/GPU) ----------------
@@ -1085,7 +1089,8 @@ def set_cuda_device(i):
 
 # v6.2: split CUDA su 2 GPU (bande orizzontali, rapporto variabile).
 # Coppia = prime 2 CUDA; quota righe del primo = _CUDA_SPLIT_RATIO.
-# _BENCH_ACTIVE distingue le label: il bench resta single-device.
+# _BENCH_ACTIVE segnala che il benchmark e' in corso (v6.2.3: il bench usa
+# lo split quando attivo, come il render interattivo).
 _BENCH_ACTIVE = False
 _CUDA_SPLIT_ON = False
 _CUDA_SPLIT_RATIO = 0.5
@@ -2303,9 +2308,9 @@ def hw_name():
             import cupy as cp
             # v5.9.0: device selezionato (dropdown GPU); con piu' GPU
             # l'ordine CUDA puo' differire da quello nvidia-smi.
-            # v6.2: in split (non durante il bench, che resta single) i nomi
-            # di entrambe le GPU.
-            if _CUDA_SPLIT_ON and not _BENCH_ACTIVE and len(_CUDA_DEVICES) >= 2:
+            # v6.2: in split i nomi di entrambe le GPU (anche durante il bench,
+            # v6.2.3: il bench ora usa lo split quando attivo).
+            if _CUDA_SPLIT_ON and len(_CUDA_DEVICES) >= 2:
                 _dev = _CUDA_DEVICES[_CUDA_DEV][0] if _CUDA_DEVICES else 0
                 name = "%s+%s" % (_cuda_short_name(_CUDA_DEVICES[0][1]),
                                   _cuda_short_name(_CUDA_DEVICES[1][1]))
@@ -3506,19 +3511,17 @@ class MandelbrotApp:
         bench_buf = None
         # v5.6.0: il buffer di lavoro serve solo al percorso CUDA (Metal/Vulkan
         # usano il proprio buffer, CPU la memoria numpy).
-        if _ACTIVE == "cuda":
+        # v6.2.3: se lo split e' attivo, non passo buf (lo split alloca i
+        # propri buffer per-device; passare buf=... forzo il single).
+        if _ACTIVE == "cuda" and not _cuda_split_ready(b["h"]):
             try:
                 import cupy as cp
-                # v5.9.0: buffer sul device selezionato (per-thread).
                 _dev = _CUDA_DEVICES[_CUDA_DEV][0] if _CUDA_DEVICES else 0
                 with cp.cuda.Device(_dev):
                     bench_buf = cp.empty((need,), dtype=cp.uint8)
             except Exception:
                 bench_buf = None
         def render():
-            # v5.1.0: modalita' CORRENTE (motore+precisione selezionati), non
-            # piu' CUDA f32 fisso. compute() dispatcha su _ACTIVE e usa
-            # _PREC (GPU) / f64 (CPU); my_gen=0 -> nessuna cancellazione.
             return compute(b["cx"], b["cy"], b["half"], b["w"], b["h"], mi,
                            buf=bench_buf)
         t_end = time.perf_counter() + b["secs"]
