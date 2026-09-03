@@ -1,11 +1,17 @@
 # ============================================================================
 # Insieme di Mandelbrot - visualizzatore interattivo
-# VERSIONE: 6.1.2
+# VERSIONE: 6.2
 # ----------------------------------------------------------------------------
 # REGOLA: ogni modifica incrementa la versione e aggiunge una voce qui sotto
 # (formato: versione - data - descrizione modifiche).
 #
 # STORICO:
+# 6.2 - 2026-09-03
+#   - Split CUDA su 2 GPU (dropdown gpu1/gpu2/Entrambe): bande orizzontali
+#     con rapporto auto-calibrato (probe cronometrate a warmup fatto,
+#     persistito in config), kernel con offset riga (bit-identico),
+#     buffer device separati, cucitura su host pinned, fallback single in
+#     errore. Benchmark sempre single-device sul device selezionato.
 # 6.1.2 - 2026-09-03
 #   - Reset riporta anche la scala a 1x1 (era persistente dopo il reset).
 # 6.1.1 - 2026-09-03
@@ -707,12 +713,14 @@ def _host_free_bytes():
         pass
     return 0
 
-def _cuda_free_bytes():
-    """(free, total) VRAM sul device CUDA selezionato; (0, 0) se illeggibile."""
+def _cuda_free_bytes(dev=None):
+    """(free, total) VRAM sul device dato (default: selezionato);
+    (0, 0) se illeggibile."""
     try:
         import cupy as cp
-        _dev = _CUDA_DEVICES[_CUDA_DEV][0] if _CUDA_DEVICES else 0
-        with cp.cuda.Device(_dev):
+        if dev is None:
+            dev = _CUDA_DEVICES[_CUDA_DEV][0] if _CUDA_DEVICES else 0
+        with cp.cuda.Device(dev):
             free, total = cp.cuda.runtime.memGetInfo()
             return int(free), int(total)
     except Exception:
@@ -729,7 +737,25 @@ def _photo_mem_ok(n, w, h):
         need_h = P * ((50 if _PREC == "f32" else 90) + 6)
         need_d = 0
     elif _ACTIVE == "cuda":
-        need_h, need_d = P * 8, P * 3
+        if _CUDA_SPLIT_ON and _cuda_split_devs() is not None:
+            # v6.2: fabbisogno per banda su ciascuna VRAM (quota rapporto).
+            r = min(0.9, max(0.1, _CUDA_SPLIT_RATIO))
+            for _shr, _dev in ((r, _cuda_split_devs()[0]),
+                               (1.0 - r, _cuda_split_devs()[1])):
+                _nd = P * _shr * 3
+                _free_d, _t = _cuda_free_bytes(_dev)
+                if _free_d > 0:
+                    if _nd * PHOTO_HEADROOM > _free_d:
+                        return False, (f"ricalcolo {n}x{n} rifiutato: servono "
+                                       f"~{_nd / 2**30:.1f} GiB di VRAM su GPU "
+                                       f"{_dev} (liberi {_free_d / 2**30:.1f})")
+                elif P / 1e6 > PHOTO_BACKSTOP_MPX:
+                    return False, (f"ricalcolo {n}x{n} rifiutato: VRAM non "
+                                   f"determinabile e {P / 1e6:.1f} Mpx oltre la "
+                                   f"rete di sicurezza")
+            need_h, need_d = P * 8, 0  # host una volta sola, device gia' visti
+        else:
+            need_h, need_d = P * 8, P * 3
     elif _ACTIVE == "metal":
         need_h, need_d = P * 8, 0
     else:  # vulkan
@@ -743,7 +769,7 @@ def _photo_mem_ok(n, w, h):
     elif P / 1e6 > PHOTO_BACKSTOP_MPX:
         return False, (f"ricalcolo {n}x{n} rifiutato: RAM non determinabile "
                        f"e {P / 1e6:.1f} Mpx oltre la rete di sicurezza")
-    if _ACTIVE == "cuda":
+    if _ACTIVE == "cuda" and need_d > 0:  # split: device gia' visti sopra
         free_d, _total_d = _cuda_free_bytes()
         if free_d > 0:
             if need_d * PHOTO_HEADROOM > free_d:
@@ -783,13 +809,14 @@ BENCH_REF = (
     ("5070 Ti CUDA (storico)", 350.0),
 )
 
-VERSION = "6.1.2"
+VERSION = "6.2"
 
 # Ultime 10 modifiche di versione per Help -> "Novità recenti..."
 # (versione, data, descrizione breve). Fonte embedded: i commenti STORICO
 # non sopravvivono alla build PyInstaller, quindi il dialog legge da qui.
 # REGOLA BUMP: aggiungere la voce nuova in testa e tenere max 10.
 HISTORY = (
+    ("6.2", "2026-09-03", "Split CUDA su 2 GPU con rapporto auto-calibrato (gpu1/gpu2/entrambe)."),
     ("6.1.2", "2026-09-03", "Reset riporta la scala a 1x1."),
     ("6.1.1", "2026-09-03", "Benchmark in esclusiva GPU anche vs ricalcolo NxN (conteggi stabili)."),
     ("6.1", "2026-09-03", "Ricalcolo NxN: memoria misurata davvero (VRAM/RAM), via tetto statico."),
@@ -799,7 +826,6 @@ HISTORY = (
     ("5.10.2", "2026-09-03", "Preview draft a 1/8 solo su CPU (GPU a 1/4)."),
     ("5.10.1", "2026-09-03", "Rinomina Foto NxN in Ricalcola NxN."),
     ("5.10.0", "2026-09-03", "Foto 2x2 + Foto 4x4 (NxN) e pulsante Ricalcola."),
-    ("5.9.8", "2026-09-03", "Zoom-out macOS: tasti globali + click destro x0.5."),
 )
 
 # ---------------- Palette (LUT 256x3 condivisa CPU/GPU) ----------------
@@ -932,7 +958,8 @@ extern "C" __global__ void __launch_bounds__(256) @@KNAME@@(
     unsigned char* __restrict__ out,
     int pal,
     @@T@@ cx, @@T@@ cy, @@T@@ half,
-    int w, int h, int mi)
+    int w, int h, int mi,
+    int row0)
 {
     @@LUTSELECT@@
     int tx = blockIdx.x * blockDim.x + threadIdx.x;
@@ -942,8 +969,11 @@ extern "C" __global__ void __launch_bounds__(256) @@KNAME@@(
     // -> 1px 16x16 vincente su entrambe le zone (z1 1.8x, z3 1.1x); tutte le
     // varianti bit-identiche tra loro (ogni pixel e' calcolato in modo
     // indipendente, la config non cambia il risultato).
+    // v6.2: row0 = prima riga della banda (split multi-GPU): la griglia e'
+    // dimensionata sulla banda (bh), la riga assoluta e' row0+ty e l'indice
+    // in out usa w/h assoluti -> partizionare non cambia un pixel.
     int col0 = tx;
-    process_pixel(col0, ty, w, h, cx, cy, half, mi, lut, out);
+    process_pixel(col0, row0 + ty, w, h, cx, cy, half, mi, lut, out);
 }
 '''
 
@@ -1031,11 +1061,148 @@ def set_cuda_device(i):
     _CUDA_DEV = max(0, min(i, len(_CUDA_DEVICES) - 1))
     _BUF = None
     _HW_CACHE.pop("cuda", None)
+    # v6.2: la selezione singola esce dallo split (dropdown gpu1/gpu2/both).
+    global _CUDA_SPLIT_ON
+    _CUDA_SPLIT_ON = False
     try:
         cp.cuda.Device(_CUDA_DEVICES[_CUDA_DEV][0]).use()
     except Exception:
         pass
     return True
+
+# v6.2: split CUDA su 2 GPU (bande orizzontali, rapporto variabile).
+# Coppia = prime 2 CUDA; quota righe del primo = _CUDA_SPLIT_RATIO.
+# _BENCH_ACTIVE distingue le label: il bench resta single-device.
+_BENCH_ACTIVE = False
+_CUDA_SPLIT_ON = False
+_CUDA_SPLIT_RATIO = 0.5
+_CUDA_SPLIT_MIN_H = 32  # sotto: single (soglia tecnica, non policy)
+_CUDA_SPLIT_BUFS = {}  # {dev_id: array} buffer device per banda (mai condivisi)
+_CUDA_SPLIT_CALIBRATING = False
+
+def _cuda_split_devs():
+    """(id0, id1) della coppia split, o None se < 2 device."""
+    if len(_CUDA_DEVICES) >= 2:
+        return (_CUDA_DEVICES[0][0], _CUDA_DEVICES[1][0])
+    return None
+
+def _cuda_split_ready(h):
+    return (_CUDA_SPLIT_ON and _cuda_split_devs() is not None
+            and h >= _CUDA_SPLIT_MIN_H)
+
+def set_cuda_split(on):
+    """Attiva/disattiva lo split (dropdown 'Entrambe'); True se ok."""
+    global _CUDA_SPLIT_ON
+    if on and _cuda_split_devs() is None:
+        return False
+    _CUDA_SPLIT_ON = bool(on)
+    _HW_CACHE.pop("cuda", None)
+    return True
+
+def _cuda_launch_band(dev, out, row0, bh, w, h, mi, pal, use64, fdt,
+                      cx, cy, half):
+    """Un launch sulla banda [row0, row0+bh) del device dato (single e split
+    passano di qui: unico code-path di lancio)."""
+    with cp.cuda.Device(dev):
+        bx, by = 16, 16
+        grid = ((w + bx - 1) // bx, (bh + by - 1) // by)
+        kernel = _KERNEL_F64 if use64 else _KERNEL_F32
+        args = (out,
+                _PAL_IDX[pal],
+                np.asarray(cx, dtype=fdt),
+                np.asarray(cy, dtype=fdt),
+                np.asarray(half, dtype=fdt),
+                np.asarray(w, dtype=np.int32),
+                np.asarray(h, dtype=np.int32),
+                np.asarray(mi, dtype=np.int32),
+                np.asarray(row0, dtype=np.int32))
+        kernel(grid, (bx, by), args)
+
+def _cuda_probe(dev, cx, cy, half, w, h, mi):
+    """Render single-device scartato su dev (warmup / calibrazione timing)."""
+    pal = list(PALETTES).index(_PALETTE)
+    use64 = (_PREC == "f64") and (_KERNEL_F64 is not None)
+    fdt = np.float64 if use64 else np.float32
+    with cp.cuda.Device(dev):
+        out = cp.empty((w * h * 3,), dtype=cp.uint8)
+        _cuda_launch_band(dev, out, 0, h, w, h, mi, pal, use64, fdt,
+                          cx, cy, half)
+        cp.cuda.runtime.deviceSynchronize()
+
+def _cuda_calibrate_split():
+    """Fissa _CUDA_SPLIT_RATIO misurando le due GPU (vista bench, probe
+    480x270, 3 run dopo burst di warmup per svegliare il clock). Background,
+    una sola istanza alla volta; in errore resta il rapporto precedente."""
+    global _CUDA_SPLIT_RATIO, _CUDA_SPLIT_CALIBRATING
+    devs = _cuda_split_devs()
+    if devs is None or _CUDA_SPLIT_CALIBRATING:
+        return
+    _CUDA_SPLIT_CALIBRATING = True
+    try:
+        b = BENCH
+        mi = auto_mi(b["half"])
+        w, h = 480, 270
+        ts = []
+        for dev in devs:
+            for _ in range(3):
+                _cuda_probe(dev, b["cx"], b["cy"], b["half"], w, h, mi)
+            t0 = time.perf_counter()
+            for _ in range(3):
+                _cuda_probe(dev, b["cx"], b["cy"], b["half"], w, h, mi)
+            ts.append(max((time.perf_counter() - t0) / 3, 1e-9))
+        r = (1.0 / ts[0]) / (1.0 / ts[0] + 1.0 / ts[1])
+        _CUDA_SPLIT_RATIO = min(0.9, max(0.1, r))
+    except Exception:
+        pass
+    finally:
+        _CUDA_SPLIT_CALIBRATING = False
+
+def _compute_gpu_cuda_split(cx, cy, half, w, h, mi, prec=None):
+    """Frame spartito sulle 2 GPU (bande orizzontali per rapporto calibrato),
+    cucito in un unico host array pinned. Errore su una banda = eccezione
+    (il chiamante ricade sul single)."""
+    devs = _cuda_split_devs()
+    r = min(0.9, max(0.1, _CUDA_SPLIT_RATIO))
+    h0 = (int(round(h * r)) // 16) * 16
+    h0 = min(max(h0, 16), h - 16)
+    bands = [(devs[0], 0, h0), (devs[1], h0, h - h0)]
+    pal = list(PALETTES).index(_PALETTE)
+    p = prec if prec in ("f32", "f64") else _PREC
+    use64 = (p == "f64") and (_KERNEL_F64 is not None)
+    fdt = np.float64 if use64 else np.float32
+    bufs = []
+    for (dev, _r0, _bh) in bands:
+        need = w * _bh * 3
+        b = _CUDA_SPLIT_BUFS.get(dev)
+        if b is None or b.size < need:
+            with cp.cuda.Device(dev):
+                b = cp.empty((need,), dtype=cp.uint8)
+            _CUDA_SPLIT_BUFS[dev] = b
+        bufs.append(b[:need])
+    pm, host = _pinned_view(w, h)
+    errs = []
+
+    def run_band(i):
+        try:
+            dev, r0, bh = bands[i]
+            _cuda_launch_band(dev, bufs[i], r0, bh, w, h, mi, pal, use64,
+                              fdt, cx, cy, half)
+            with cp.cuda.Device(dev):
+                cp.cuda.runtime.memcpy(pm.ptr + r0 * w * 3,
+                                       bufs[i].data.ptr, w * bh * 3,
+                                       cp.cuda.runtime.memcpyDeviceToHost)
+        except Exception as ex:
+            errs.append(ex)
+
+    ts = [threading.Thread(target=run_band, args=(i,), daemon=True)
+          for i in (0, 1)]
+    for t in ts:
+        t.start()
+    for t in ts:
+        t.join()
+    if errs:
+        raise errs[0]
+    return Image.fromarray(host.reshape((h, w, 3)))
 
 # ---------------- GPU (Metal, Apple Silicon) ----------------
 # Backend Metal per Apple GPU (M1...). Metal su Apple Silicon NON supporta
@@ -1554,6 +1721,13 @@ def _compute_gpu_cuda(cx, cy, half, w, h, mi, buf=None, prec=None):
     global _BUF
     # v5.9.0: tutto sul device selezionato (il current-device CuPy e'
     # per-thread: worker, benchmark e warmup girano su thread diversi).
+    # v6.2: buf dedicato (benchmark) = sempre single; con buf=None e split
+    # attivo si spartisce sulle 2 GPU (fallback single in errore).
+    if buf is None and _cuda_split_ready(h):
+        try:
+            return _compute_gpu_cuda_split(cx, cy, half, w, h, mi, prec=prec)
+        except Exception:
+            pass
     _dev = _CUDA_DEVICES[_CUDA_DEV][0] if _CUDA_DEVICES else 0
     with cp.cuda.Device(_dev):
         need = w * h * 3
@@ -1562,23 +1736,12 @@ def _compute_gpu_cuda(cx, cy, half, w, h, mi, buf=None, prec=None):
                 _BUF = cp.empty((need,), dtype=cp.uint8)
             buf = _BUF
         out = buf[:need]
-        bx, by = 16, 16
-        # v5.0.0 (Fase 3): 1 px/thread -> grid = ceil(w/bx) x ceil(h/by)
-        grid = ((w + bx - 1) // bx, (h + by - 1) // by)
         pal = list(PALETTES).index(_PALETTE)
         p = prec if prec in ("f32", "f64") else _PREC
         use64 = (p == "f64") and (_KERNEL_F64 is not None)
-        kernel = _KERNEL_F64 if use64 else _KERNEL_F32
         fdt = np.float64 if use64 else np.float32
-        args = (out,
-                _PAL_IDX[pal],
-                np.asarray(cx, dtype=fdt),
-                np.asarray(cy, dtype=fdt),
-                np.asarray(half, dtype=fdt),
-                np.asarray(w, dtype=np.int32),
-                np.asarray(h, dtype=np.int32),
-                np.asarray(mi, dtype=np.int32))
-        kernel(grid, (bx, by), args)
+        _cuda_launch_band(_dev, out, 0, h, w, h, mi, pal, use64, fdt,
+                          cx, cy, half)
         # v4.16.0: D2H pinned (DMA, memcpyDeviceToHost) con fallback .get().
         try:
             pm, host = _pinned_view(w, h)
@@ -1993,6 +2156,14 @@ def hw_name():
             import cupy as cp
             # v5.9.0: device selezionato (dropdown GPU); con piu' GPU
             # l'ordine CUDA puo' differire da quello nvidia-smi.
+            # v6.2: in split (non durante il bench, che resta single) i nomi
+            # di entrambe le GPU.
+            if _CUDA_SPLIT_ON and not _BENCH_ACTIVE and len(_CUDA_DEVICES) >= 2:
+                _dev = _CUDA_DEVICES[_CUDA_DEV][0] if _CUDA_DEVICES else 0
+                name = "%s+%s" % (_cuda_short_name(_CUDA_DEVICES[0][1]),
+                                  _cuda_short_name(_CUDA_DEVICES[1][1]))
+                _HW_CACHE[_ACTIVE] = name
+                return name
             _dev = _CUDA_DEVICES[_CUDA_DEV][0] if _CUDA_DEVICES else 0
             name = cp.cuda.runtime.getDeviceProperties(_dev)["name"]
             if isinstance(name, bytes):
@@ -2048,6 +2219,10 @@ def _warmup_vulkan_adapter():
 if _GPU:
     threading.Thread(target=_gpu_warmup, daemon=True).start()
 threading.Thread(target=_numba_warmup, daemon=True).start()
+# v6.2: calibrazione split in background se 2+ CUDA (warmup incluso per
+# entrambe; rapporto pronto quando si seleziona "Entrambe").
+if _CUDA_OK and len(_CUDA_DEVICES) >= 2:
+    threading.Thread(target=_cuda_calibrate_split, daemon=True).start()
 
 # v5.1.0: il benchmark segue la modalita' corrente (motore+precisione
 # selezionati nell'app); per mostrarla nel dialog si usa backend().
@@ -2228,7 +2403,9 @@ class MandelbrotApp:
             "tranne mentre si scrive nelle caselle), r per il reset.\n\n"
             "Motore e precisione: toolbar Motore (CPU / CUDA / Metal / Vulkan) "
             "e Precisione (f32 / f64); i backend non disponibili restano grigi. "
-            "Con piu' GPU, il dropdown GPU sceglie device/adapter del motore. "
+            "Con piu' GPU, il dropdown GPU sceglie device/adapter del motore, "
+            "o Entrambe per spartire il render sulle 2 CUDA (rapporto "
+            "auto-calibrato; il benchmark resta sulla singola selezionata). "
             "CUDA richiede driver NVIDIA + runtime; Vulkan funziona out-of-the-box.\n\n"
             "Iterazioni: Auto calcola mi dallo zoom; in manuale si imposta il "
             "valore (Invio) o lo si cambia di \u00b11000.\n\n"
@@ -2518,13 +2695,21 @@ class MandelbrotApp:
 
     def _gpu_labels(self):
         # v5.9.2: voci del dropdown per il motore attivo (vuoto = nascosto).
+        # v6.2: con 2+ CUDA c'e' anche "Entrambe (split)" con le quote
+        # calibrate (dropdown gpu1/gpu2/both).
         if _ACTIVE == "cuda" and len(_CUDA_DEVICES) > 1:
-            return [_cuda_label(i) for i in range(len(_CUDA_DEVICES))]
+            labs = [_cuda_label(i) for i in range(len(_CUDA_DEVICES))]
+            _r = min(0.9, max(0.1, _CUDA_SPLIT_RATIO))
+            labs.append("Entrambe (split %d/%d)"
+                        % (round(_r * 100), 100 - round(_r * 100)))
+            return labs
         if _ACTIVE == "vulkan" and len(_VULKAN_ADAPTERS) > 1:
             return [_vulkan_label(i) for i in range(len(_VULKAN_ADAPTERS))]
         return []
 
-    def _gpu_pos(self):
+    def _gpu_pos(self, labels):
+        if _ACTIVE == "cuda" and _CUDA_SPLIT_ON and labels:
+            return len(labels) - 1
         return _VULKAN_DEV if _ACTIVE == "vulkan" else _CUDA_DEV
 
     def _refresh_gpu_menu(self):
@@ -2539,7 +2724,7 @@ class MandelbrotApp:
             self.gpu_frame.pack_forget()
             return
         self.gpu_frame.pack(side="left", padx=(10, 0))
-        self.gpu_var = tk.StringVar(value=labels[self._gpu_pos()])
+        self.gpu_var = tk.StringVar(value=labels[self._gpu_pos(labels)])
         self.gpu_menu = tk.OptionMenu(self.gpu_frame, self.gpu_var, *labels,
                                       command=self.choose_gpu_device)
         self.gpu_menu.pack(side="left", padx=2, pady=3)
@@ -2548,7 +2733,7 @@ class MandelbrotApp:
         # v5.9.0: allinea il valore senza ricostruire (dopo una selezione).
         labels = self._gpu_labels()
         if self.gpu_var is not None and labels:
-            self.gpu_var.set(labels[self._gpu_pos()])
+            self.gpu_var.set(labels[self._gpu_pos(labels)])
 
     def _select_cuda_device(self, i):
         if not set_cuda_device(i):
@@ -2565,6 +2750,18 @@ class MandelbrotApp:
 
     def choose_gpu_device(self, label):
         # v5.9.0/v5.9.2: cambio GPU dal dropdown ("<id>: <nome>").
+        # v6.2: "Entrambe (split...)" attiva lo split sulle prime 2 CUDA
+        # (il benchmark resta comunque sul device singolo _CUDA_DEV).
+        if _ACTIVE == "cuda" and str(label).startswith("Entrambe"):
+            if set_cuda_split(True):
+                self._refresh_title()
+                self._sync_gpu_menu()
+                threading.Thread(target=_cuda_calibrate_split,
+                                 daemon=True).start()
+                self.request_render("gpu: entrambe (split)")
+            else:
+                self._sync_gpu_menu()
+            return
         try:
             _id = int(str(label).split(":", 1)[0])
         except (TypeError, ValueError):
@@ -2852,6 +3049,8 @@ class MandelbrotApp:
         c = dict(precision=_PREC, palette=_PALETTE,
                  backend=_ACTIVE,
                  cuda_device=_CUDA_DEV,
+                 cuda_split=_CUDA_SPLIT_ON,
+                 cuda_split_ratio=_CUDA_SPLIT_RATIO,
                  vulkan_adapter=_VULKAN_DEV,
                  bench=dict(self.bench))
         try:
@@ -2889,6 +3088,15 @@ class MandelbrotApp:
         self._select_backend(be)
         # v5.9.0: device CUDA persistito (set_cuda_device clamp-a il range).
         self._select_cuda_device(c.get("cuda_device", 0))
+        # v6.2: split + rapporto persistiti (solo con 2+ CUDA e motore cuda).
+        global _CUDA_SPLIT_RATIO
+        try:
+            _CUDA_SPLIT_RATIO = min(0.9, max(0.1,
+                                             float(c.get("cuda_split_ratio", 0.5))))
+        except (TypeError, ValueError):
+            _CUDA_SPLIT_RATIO = 0.5
+        if c.get("cuda_split", False) and _ACTIVE == "cuda":
+            set_cuda_split(True)
         # v5.9.2: adapter Vulkan persistito (idem); poi il dropdown segue il
         # motore attivo (potrebbe cambiare contenuto rispetto all'avvio).
         self._select_vulkan_adapter(c.get("vulkan_adapter", 0))
@@ -3118,6 +3326,9 @@ class MandelbrotApp:
         # v6.1.1: avvio effettivo (immediato o accodato da _photo_done).
         # Il bench ha la GPU in esclusiva: cancella foto pendenti e il
         # full-timer (niente take_photo concorrente per gli 8 s).
+        # v6.2: il bench e' sempre single-device (buf dedicato -> mai split).
+        global _BENCH_ACTIVE
+        _BENCH_ACTIVE = True
         self._bench_after_photo = False
         self._photo_pending = False
         if self._full_timer is not None:
@@ -3165,6 +3376,8 @@ class MandelbrotApp:
         self._bench_finished = True
 
     def _bench_done(self, count, secs, err):
+        global _BENCH_ACTIVE
+        _BENCH_ACTIVE = False
         self._bench_running = False
         self.root.config(cursor="")
         self.status.config(text="benchmark completato")

@@ -92,15 +92,24 @@ Registro `PALETTES` (fonte unica): ordine = indice kernel (0 fuoco, 1 ghiaccio,
 | vulkan | sì | mai (f32-only) |
 
 - GPU multipla: dropdown `GPU:` con contenuto per motore attivo (nascosto se
-  il motore ha <= 1 GPU). CUDA (v5.9.0): device da `_CUDA_DEVICES`, default 0;
-  render/benchmark/warmup sul device scelto via `with cp.cuda.Device(...)`
-  (current-device CuPy per-thread); cambio invalida `_BUF`. Vulkan (v5.9.2):
-  adapter fisici backend Vulkan da `_VULKAN_ADAPTERS` (deduplicati per
-  vendor/device, default = ex high-performance); cambio via
-  `VulkanBackend.select_adapter()` (ricrea risorse device-bound sotto lock).
-  Titolo/stato seguono la scelta (`hw_name`); warmup 64x64 in background sul
-  nuovo device/adapter se il motore è attivo. Selezioni persistite
-  (`cuda_device`, `vulkan_adapter`, clampate).
+  il motore ha <= 1 GPU). CUDA: device da `_CUDA_DEVICES` (`gpu1`/`gpu2`/...)
+  + voce `Entrambe (split NN/MM)` (v6.2): spartisce ogni render in bande
+  orizzontali sulle prime 2 CUDA con rapporto auto-calibrato
+  (`_cuda_calibrate_split`: probe 480x270 sulla vista bench dopo warmup,
+  quota = velocità relativa, clamp 10/90, persistita in `cuda_split_ratio`);
+  kernel con offset `row0` (bit-identico al single), buffer device separati
+  per banda (`_CUDA_SPLIT_BUFS`), cucitura su host pinned, fallback single
+  in errore; sotto 32 px di altezza resta single (soglia tecnica). Render
+  interattivi, full e foto NxN usano lo split; benchmark e warmup singolo
+  restano sul device scelto (`buf` dedicato = mai split). Selezione singola
+  esce dallo split; reset torna a gpu1. Titolo/stato con entrambi i nomi
+  (`hw_name`, tranne durante il bench che mostra il device benchato).
+  Selezioni persistite (`cuda_device`, `cuda_split`, `cuda_split_ratio`,
+  `vulkan_adapter`). Vulkan (v5.9.2): adapter fisici backend Vulkan da
+  `_VULKAN_ADAPTERS` (deduplicati per vendor/device, default = ex
+  high-performance); cambio via `VulkanBackend.select_adapter()` (ricrea
+  risorse device-bound sotto lock); warmup 64x64 in background sul nuovo
+  device/adapter se il motore è attivo.
 - Precisione = settaggio globale unico (default f32). Bottone f64 dinamico
   (`_sync_precision_buttons`, chiamato in `_build_toolbar`/`set_backend`/`reset`;
   `load_config` passa da `_select_backend`/`_select_precision` + sync):
@@ -142,7 +151,10 @@ Sotto solo scarti + gotcha API.
   entrambi gli assi (`col >= w || row >= h`, come Metal/Vulkan): senza il
   check su `row` i thread di bordo in y scrivevano fuori `out`
   (`cudaErrorIllegalAddress` sul ricalcolo NxN grande, silente sui frame
-  piccoli per la slack di `_BUF`).
+  piccoli per la slack di `_BUF`). Parametro `row0` (v6.2): prima riga della
+  banda per lo split multi-GPU (griglia dimensionata sulla banda, indici su
+  w/h assoluti → partizionare non cambia un pixel); lancio unico
+  `_cuda_launch_band` per single e split.
 - Scalari = array numpy size-1; indice palette preallocato (`_PAL_IDX`);
   `np.asarray` su array CuPy vietato → `.get()`.
 - D2H pinned: `PinnedMemory(size)` + `runtime.memcpy(..., memcpyDeviceToHost)`
@@ -302,7 +314,7 @@ Sotto solo scarti + gotcha API.
 | file | path | chiavi | note |
 |---|---|---|---|
 | zona (JSON indentato) | a scelta, default `mandelbrot_AAAAMMGG_HHMMSS.json` | `app, versione, cx, cy, half, mi, mi_auto` | `Carica` ripristina vista+MI (clamp `half`), rende file corrente (titolo). `Salva zona` voce disabilitata se nessun file corrente; `save_zone()` senza file ricade su `save_as`. PNG usa stesso pattern nome |
-| config | `~/mandelbrot/config.json` | `precision, palette, backend, cuda_device, vulkan_adapter, bench` | vista e `view_file` mai persistiti (vecchi valori ignorati); backend legacy `"gpu"` → default, ignoto → default; `cuda_device`/`vulkan_adapter` clampati al range (default 0); salvataggio all'uscita + throttle 1 s (`after(1000)`; `request_render` marca dirty anche per sola vista) |
+| config | `~/mandelbrot/config.json` | `precision, palette, backend, cuda_device, cuda_split, cuda_split_ratio, vulkan_adapter, bench` | vista e `view_file` mai persistiti (vecchi valori ignorati); backend legacy `"gpu"` → default, ignoto → default; `cuda_device`/`vulkan_adapter` clampati al range (default 0), `cuda_split_ratio` clampato 0.1–0.9 (default 0.5); salvataggio all'uscita + throttle 1 s (`after(1000)`; `request_render` marca dirty anche per sola vista) |
 
 - Avvio sempre da default (insieme intero + MI auto); vista precedente solo via
   `Carica zona...`.
@@ -322,7 +334,8 @@ Sotto solo scarti + gotcha API.
   persistente non tocca il bench); CUDA usa buffer proprio (allocato sul
   device scelto), Metal/Vulkan output proprio, CPU memoria numpy. Per gli
   8 s ha la GPU in esclusiva (worker in pausa E ricalcolo NxN sospeso, §7);
-  se il device è occupato/in reset il dialog
+  bench sempre 1x1 sul device singolo selezionato (mai split, storici
+  confrontabili); se il device è occupato/in reset il dialog
   FALLITO lo segnala con hint (riprovare o riavviare).
 - Report: dialog con `rendering/s` grande (42 pt, `#2ea44f`), statistiche
   (n. rendering, ms/render), grafico + griglia parametri (riga `Hardware` da
