@@ -1,11 +1,15 @@
 # ============================================================================
 # Insieme di Mandelbrot - visualizzatore interattivo
-# VERSIONE: 5.9.2
+# VERSIONE: 5.9.3
 # ----------------------------------------------------------------------------
 # REGOLA: ogni modifica incrementa la versione e aggiunge una voce qui sotto
 # (formato: versione - data - descrizione modifiche).
 #
 # STORICO:
+# 5.9.3 - 2026-09-03
+#   - Benchmark: ref 4070 Super Vulkan corretto 177.0 -> 124 rendering/s
+#     (misurato in-app sul vero adapter; 177 era col bug pre-5.9.2 che
+#     girava tutto sulla 5070 Ti).
 # 5.9.2 - 2026-09-03
 #   - Bugfix: il dropdown GPU pilotava solo CUDA; Vulkan usava sempre
 #     l'adapter high-performance (stesso per 4070/5070 Ti -> benchmark
@@ -609,19 +613,20 @@ BENCH = dict(cx=-0.7499302568795561, cy=-0.015139113925433963, half=5.2267371559
 # stessa regione/parametri): evidenziano il salto CPU->GPU su macchine note.
 BENCH_REF = (
     ("AMD 9900X (storico)", 6.62),
-    ("4070 Super Vulkan (storico)", 177.0),
+    ("4070 Super Vulkan (storico)", 124.0),
     ("5070 Ti Vulkan (storico)", 179.0),
     ("4070 Super CUDA (storico)", 250.0),
     ("5070 Ti CUDA (storico)", 350.0),
 )
 
-VERSION = "5.9.2"
+VERSION = "5.9.3"
 
 # Ultime 10 modifiche di versione per Help -> "Novità recenti..."
 # (versione, data, descrizione breve). Fonte embedded: i commenti STORICO
 # non sopravvivono alla build PyInstaller, quindi il dialog legge da qui.
 # REGOLA BUMP: aggiungere la voce nuova in testa e tenere max 10.
 HISTORY = (
+    ("5.9.3", "2026-09-03", "Ref 4070 Super Vulkan corretto a 124."),
     ("5.9.2", "2026-09-03", "Dropdown GPU anche per Vulkan (adapter selezionabile)."),
     ("5.9.1", "2026-09-03", "Benchmark: worker in pausa, hint device; refs su GPU locali."),
     ("5.9.0", "2026-09-03", "Dropdown scelta GPU se > 1 CUDA (persistita in config)."),
@@ -631,7 +636,6 @@ HISTORY = (
     ("5.8.10", "2026-09-04", "Etichetta CPU single/multi-core per precisione."),
     ("5.8.9", "2026-09-03", "Ritenzione dist/: ultime 3 versioni per piattaforma."),
     ("5.8.8", "2026-09-02", "Fix nome GPU Metal (selector callable invocato)."),
-    ("5.8.7", "2026-09-02", "Ritenzione dist/: un artefatto per piattaforma garantito."),
 )
 
 # ---------------- Palette (LUT 256x3 condivisa CPU/GPU) ----------------

@@ -289,7 +289,7 @@ Sotto solo scarti + gotcha API.
 | barra | valore (rendering/s) | stile |
 |---|---|---|
 | `AMD 9900X (storico)` | 6.62 | grigia |
-| `4070 Super Vulkan (storico)` | 177.0 | grigia |
+| `4070 Super Vulkan (storico)` | 124.0 | grigia |
 | `5070 Ti Vulkan (storico)` | 179.0 | grigia |
 | `4070 Super CUDA (storico)` | 250.0 | grigia |
 | `5070 Ti CUDA (storico)` | 350.0 | grigia |
