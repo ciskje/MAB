@@ -183,7 +183,9 @@ Sotto solo scarti + gotcha API.
 
 ## 7. Pipeline (asincrona, latest-wins)
 - Worker daemon + `Condition` + slot job singolo; request in coda collassano
-  sull'ultimo.
+  sull'ultimo. Durante il benchmark il worker scarta i job (render
+  interattivi sospesi: niente contesa col thread bench sullo stesso device,
+  su GPU display evita TDR/reset).
 - `_submit`: `self._gen += 1; _GEN[0] = self._gen` (`_GEN` =
   `np.zeros(1, int32)`); worker scarta il frame se `_GEN[0] != gen` prima di
   `frames.put` (mostrato poi da `_poll`).
@@ -268,19 +270,24 @@ Sotto solo scarti + gotcha API.
 
 - Esegue nel modo corrente (motore + f32/f64 di toolbar, GPU selezionata);
   CUDA usa buffer proprio (allocato sul device scelto), Metal/Vulkan output
-  proprio, CPU memoria numpy.
+  proprio, CPU memoria numpy. Per gli 8 s ha la GPU in esclusiva (worker in
+  pausa, §7); se il device è occupato/in reset il dialog FALLITO lo segnala
+  con hint (riprovare o riavviare).
 - Report: dialog con `rendering/s` grande (42 pt, `#2ea44f`), statistiche
   (n. rendering, ms/render), grafico + griglia parametri (riga `Hardware` da
   `hw_name()`); errore → `BENCHMARK FALLITO` + dettaglio (`#e5534b`).
 
 | barra | valore (rendering/s) | stile |
 |---|---|---|
-| `9900X CPU (storico)` | 6.62 | grigia |
-| `5070 Ti Vulkan (storico)` | 177.0 | grigia |
-| `5070 Ti CUDA (storico)` | 250.0 | grigia |
+| `AMD 9900X (storico)` | 6.62 | grigia |
+| `4070 Super Vulkan (storico)` | 177.0 | grigia |
+| `5070 Ti Vulkan (storico)` | 179.0 | grigia |
+| `4070 Super CUDA (storico)` | 250.0 | grigia |
+| `5070 Ti CUDA (storico)` | 350.0 | grigia |
 | `<backend()> — questa run` | misurato | verde (solo metodo, no hw) |
 
-  Grafico `tk.Canvas` 590x150 (margini 230,60,8,26; barre 20 px, gap 10 px):
+  Grafico `tk.Canvas` 590xN (margini 230,60,8,26; barre 20 px, gap 10 px;
+  altezza N = 8 + n*20 + (n-1)*10 + 26 dal numero di barre):
   scala lineare 0→max, step nice 1/2/5×10^n, valore a fine barra.
 
 ## 11. Build dell'app (multipiattaforma)

@@ -1,11 +1,22 @@
 # ============================================================================
 # Insieme di Mandelbrot - visualizzatore interattivo
-# VERSIONE: 5.9.0
+# VERSIONE: 5.9.1
 # ----------------------------------------------------------------------------
 # REGOLA: ogni modifica incrementa la versione e aggiunge una voce qui sotto
 # (formato: versione - data - descrizione modifiche).
 #
 # STORICO:
+# 5.9.1 - 2026-09-03
+#   - Bugfix benchmark su GPU display (es. 5070 Ti che pilota il desktop):
+#     durante gli 8 s il worker sospende i render interattivi (niente
+#     contesa col thread bench sullo stesso device: un kernel pesante in
+#     vista + benchmark rischiava TDR/reset -> cudaErrorDevicesUnavailable
+#     al primo render). Se il device risulta comunque occupato/in reset,
+#     il dialog FALLITO aggiunge il suggerimento di riprovare o riavviare.
+#   - Riferimenti storici ridefiniti sulle GPU locali (5 voci): AMD 9900X
+#     6.62, 4070 Super Vulkan 177.0, 5070 Ti Vulkan 179.0,
+#     4070 Super CUDA 250.0, 5070 Ti CUDA 350.0 rendering/s; canvas del
+#     grafico ad altezza dinamica (150px fissi insufficienti per 6 barre).
 # 5.9.0 - 2026-09-03
 #   - GPU multipla: se CuPy rileva > 1 GPU CUDA, la toolbar mostra un dropdown
 #     "GPU:" (indice + nome) per scegliere il device di render/benchmark.
@@ -590,18 +601,21 @@ BENCH = dict(cx=-0.7499302568795561, cy=-0.015139113925433963, half=5.2267371559
 # Riferimenti storici per il grafico a barre del benchmark (rendering/s,
 # stessa regione/parametri): evidenziano il salto CPU->GPU su macchine note.
 BENCH_REF = (
-    ("9900X CPU (storico)", 6.62),
-    ("5070 Ti Vulkan (storico)", 177.0),
-    ("5070 Ti CUDA (storico)", 250.0),
+    ("AMD 9900X (storico)", 6.62),
+    ("4070 Super Vulkan (storico)", 177.0),
+    ("5070 Ti Vulkan (storico)", 179.0),
+    ("4070 Super CUDA (storico)", 250.0),
+    ("5070 Ti CUDA (storico)", 350.0),
 )
 
-VERSION = "5.9.0"
+VERSION = "5.9.1"
 
 # Ultime 10 modifiche di versione per Help -> "Novità recenti..."
 # (versione, data, descrizione breve). Fonte embedded: i commenti STORICO
 # non sopravvivono alla build PyInstaller, quindi il dialog legge da qui.
 # REGOLA BUMP: aggiungere la voce nuova in testa e tenere max 10.
 HISTORY = (
+    ("5.9.1", "2026-09-03", "Benchmark: worker in pausa, hint device; refs su GPU locali."),
     ("5.9.0", "2026-09-03", "Dropdown scelta GPU se > 1 CUDA (persistita in config)."),
     ("5.8.13", "2026-09-03", "Colore UI: status e accento per motore, errori in rosso."),
     ("5.8.12", "2026-09-03", "Help: voce Novità recenti con le ultime 10 modifiche."),
@@ -611,7 +625,6 @@ HISTORY = (
     ("5.8.8", "2026-09-02", "Fix nome GPU Metal (selector callable invocato)."),
     ("5.8.7", "2026-09-02", "Ritenzione dist/: un artefatto per piattaforma garantito."),
     ("5.8.6", "2026-09-02", "Icona .icns via Pillow (sips falliva su macOS 26.x)."),
-    ("5.8.5", "2026-09-02", "Ritenzione artefatti KEEP_N=3 in dist/."),
 )
 
 # ---------------- Palette (LUT 256x3 condivisa CPU/GPU) ----------------
@@ -2252,6 +2265,12 @@ class MandelbrotApp:
                     self._cv.wait()
                 job = self._job
                 self._job = None
+            # v5.9.1: durante il benchmark i render interattivi sono sospesi
+            # (niente contesa col thread bench sullo stesso device: su una
+            # GPU display, kernel pesante in vista + benchmark insieme
+            # rischiava TDR/reset -> cudaErrorDevicesUnavailable).
+            if self._bench_running:
+                continue
             view, w, h, gen = job
             try:
                 t0 = time.perf_counter()
@@ -2473,12 +2492,13 @@ class MandelbrotApp:
         ]
 
     def _bench_chart(self, parent, rps):
-        """Grafico a barre orizzontali del benchmark: i 3 riferimenti storici
+        """Grafico a barre orizzontali del benchmark: i riferimenti storici
         (BENCH_REF, con nome hardware) + la run corrente (rps) evidenziata, col
         solo metodo attivo nell'etichetta (es. "CUDA f32 - questa run"). Il nome
         hardware della run corrente NON e' nel grafico (v5.8.1: mostrato sotto
         dal dialog chiamante). Scala orizzontale lineare automatica sul massimo
-        dei valori. Ritorna il Canvas (da packare da chi chiama)."""
+        dei valori; altezza in base al numero di barre. Ritorna il Canvas
+        (da packare da chi chiama)."""
         bars = list(BENCH_REF)
         # v5.8.1: la run corrente mostra solo il metodo (backend); il nome
         # hardware NON e' nel grafico -> mostrato sotto dal dialog chiamante.
@@ -2492,13 +2512,15 @@ class MandelbrotApp:
         step = next(m2 * mag for m2 in (1.0, 2.0, 5.0, 10.0) if m2 * mag >= raw)
         nt = max(1, int(math.ceil(raw_max / step - 1e-9)))
         axis_max = nt * step
-        W, H = 590, 150
+        W = 590
         L, R, T, B = 230, 60, 8, 26
         pw = W - L - R
         bar_h, gap = 20, 10
         n = len(bars)
         total = n * bar_h + (n - 1) * gap
-        y0 = T + max((H - T - B - total) // 2, 0)
+        # v5.9.1: altezza dinamica (150px fissi non bastavano per 6 barre).
+        H = T + total + B
+        y0 = T
         cv = tk.Canvas(parent, width=W, height=H, highlightthickness=0)
         def x(v):
             return L + pw * v / axis_max
@@ -2603,6 +2625,13 @@ class MandelbrotApp:
                      foreground="#e5534b").pack(pady=(16, 6))
             tk.Label(body, text=str(err), foreground="#e5534b",
                      wraplength=420, justify="left").pack(anchor="w", pady=(0, 16))
+            # v5.9.1: hint operativo se il device e' occupato o in reset (TDR).
+            if err is not None and ("DevicesUnavailable" in str(err)
+                                    or "busy or unavailable" in str(err)):
+                tk.Label(body, text="Device CUDA occupato o in reset: riprova "
+                         "tra poco o riavvia l'app prima di rilanciare.",
+                         wraplength=420, justify="left").pack(anchor="w",
+                                                             pady=(0, 16))
         tk.Label(body, text="Parametri del test:").pack(anchor="w", pady=(0, 4))
         rows = tk.Frame(body)
         rows.pack(fill="x", anchor="w")
