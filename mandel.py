@@ -1,11 +1,19 @@
 # ============================================================================
 # Insieme di Mandelbrot - visualizzatore interattivo
-# VERSIONE: 5.8.13
+# VERSIONE: 5.9.0
 # ----------------------------------------------------------------------------
 # REGOLA: ogni modifica incrementa la versione e aggiunge una voce qui sotto
 # (formato: versione - data - descrizione modifiche).
 #
 # STORICO:
+# 5.9.0 - 2026-09-03
+#   - GPU multipla: se CuPy rileva > 1 GPU CUDA, la toolbar mostra un dropdown
+#     "GPU:" (indice + nome) per scegliere il device di render/benchmark.
+#     Selezione persistita in config ("cuda_device"), titolo/stato seguono
+#     il device scelto (hw_name sul device attivo). Il device CuPy e'
+#     per-thread: render, benchmark e warmup usano
+#     'with cp.cuda.Device(_CUDA_DEV)'; cambio device invalida _BUF e scalda
+#     il nuovo device in background (64x64) se CUDA e' attivo.
 # 5.8.13 - 2026-09-03
 #   - UI: un po' di colore (toni medi, leggibili su chiaro/scuro): status bar
 #     nel colore del motore attivo, barra accento da 3px sopra il canvas,
@@ -587,13 +595,14 @@ BENCH_REF = (
     ("5070 Ti CUDA (storico)", 250.0),
 )
 
-VERSION = "5.8.13"
+VERSION = "5.9.0"
 
 # Ultime 10 modifiche di versione per Help -> "Novità recenti..."
 # (versione, data, descrizione breve). Fonte embedded: i commenti STORICO
 # non sopravvivono alla build PyInstaller, quindi il dialog legge da qui.
 # REGOLA BUMP: aggiungere la voce nuova in testa e tenere max 10.
 HISTORY = (
+    ("5.9.0", "2026-09-03", "Dropdown scelta GPU se > 1 CUDA (persistita in config)."),
     ("5.8.13", "2026-09-03", "Colore UI: status e accento per motore, errori in rosso."),
     ("5.8.12", "2026-09-03", "Help: voce Novità recenti con le ultime 10 modifiche."),
     ("5.8.11", "2026-09-03", "Menu Help con Istruzioni e Informazioni (autore)."),
@@ -603,7 +612,6 @@ HISTORY = (
     ("5.8.7", "2026-09-02", "Ritenzione dist/: un artefatto per piattaforma garantito."),
     ("5.8.6", "2026-09-02", "Icona .icns via Pillow (sips falliva su macOS 26.x)."),
     ("5.8.5", "2026-09-02", "Ritenzione artefatti KEEP_N=3 in dist/."),
-    ("5.8.4", "2026-09-02", "Generazione .icns per la build macOS."),
 )
 
 # ---------------- Palette (LUT 256x3 condivisa CPU/GPU) ----------------
@@ -789,6 +797,52 @@ try:
             _KERNEL_F64 = None
 except Exception:
     _CUDA_OK = False
+
+# v5.9.0: GPU CUDA multiple. _CUDA_DEVICES = [(id, nome)] rilevate all'avvio;
+# _CUDA_DEV = indice selezionato (default 0). Il dropdown "GPU:" in toolbar
+# compare solo se > 1. Il device CuPy e' PER-THREAD: i percorsi di render,
+# benchmark e warmup entrano in 'with cp.cuda.Device(_CUDA_DEV)' (il .use()
+# qui sotto vale solo per il thread chiamante).
+_CUDA_DEVICES = []
+_CUDA_DEV = 0
+if _CUDA_OK:
+    try:
+        for _i in range(cp.cuda.runtime.getDeviceCount()):
+            _nm = cp.cuda.runtime.getDeviceProperties(_i)["name"]
+            if isinstance(_nm, bytes):
+                _nm = _nm.decode("utf-8", "replace")
+            _CUDA_DEVICES.append((_i, str(_nm).strip()))
+    except Exception:
+        _CUDA_DEVICES = []
+
+def _cuda_short_name(name):
+    # "NVIDIA GeForce RTX 5070 Ti" -> "GeForce RTX 5070 Ti" (dropdown compatto)
+    if name.startswith("NVIDIA "):
+        return name[len("NVIDIA "):]
+    return name
+
+def _cuda_label(i):
+    _id, _nm = _CUDA_DEVICES[i]
+    return "%d: %s" % (_id, _cuda_short_name(_nm))
+
+def set_cuda_device(i):
+    """Seleziona la GPU CUDA (indice in _CUDA_DEVICES); True se ok.
+    Invalida _BUF (realloc sul nuovo device) e la cache hw_name."""
+    global _CUDA_DEV, _BUF
+    if not _CUDA_DEVICES:
+        return False
+    try:
+        i = int(i)
+    except (TypeError, ValueError):
+        return False
+    _CUDA_DEV = max(0, min(i, len(_CUDA_DEVICES) - 1))
+    _BUF = None
+    _HW_CACHE.pop("cuda", None)
+    try:
+        cp.cuda.Device(_CUDA_DEVICES[_CUDA_DEV][0]).use()
+    except Exception:
+        pass
+    return True
 
 # ---------------- GPU (Metal, Apple Silicon) ----------------
 # Backend Metal per Apple GPU (M1...). Metal su Apple Silicon NON supporta
@@ -1221,37 +1275,41 @@ def _pinned_view(w, h):
 
 def _compute_gpu_cuda(cx, cy, half, w, h, mi, buf=None, prec=None):
     global _BUF
-    need = w * h * 3
-    if buf is None:
-        if _BUF is None or _BUF.size < need:
-            _BUF = cp.empty((need,), dtype=cp.uint8)
-        buf = _BUF
-    out = buf[:need]
-    bx, by = 16, 16
-    # v5.0.0 (Fase 3): 1 px/thread -> grid = ceil(w/bx) x ceil(h/by)
-    grid = ((w + bx - 1) // bx, (h + by - 1) // by)
-    pal = list(PALETTES).index(_PALETTE)
-    p = prec if prec in ("f32", "f64") else _PREC
-    use64 = (p == "f64") and (_KERNEL_F64 is not None)
-    kernel = _KERNEL_F64 if use64 else _KERNEL_F32
-    fdt = np.float64 if use64 else np.float32
-    args = (out,
-            _PAL_IDX[pal],
-            np.asarray(cx, dtype=fdt),
-            np.asarray(cy, dtype=fdt),
-            np.asarray(half, dtype=fdt),
-            np.asarray(w, dtype=np.int32),
-            np.asarray(h, dtype=np.int32),
-            np.asarray(mi, dtype=np.int32))
-    kernel(grid, (bx, by), args)
-    # v4.16.0: D2H pinned (DMA, memcpyDeviceToHost) con fallback .get().
-    try:
-        pm, host = _pinned_view(w, h)
-        cp.cuda.runtime.memcpy(pm.ptr, out.data.ptr, w * h * 3,
-                               cp.cuda.runtime.memcpyDeviceToHost)
-        return Image.fromarray(host.reshape((h, w, 3)))
-    except Exception:
-        return Image.fromarray(out.get().reshape((h, w, 3)))
+    # v5.9.0: tutto sul device selezionato (il current-device CuPy e'
+    # per-thread: worker, benchmark e warmup girano su thread diversi).
+    _dev = _CUDA_DEVICES[_CUDA_DEV][0] if _CUDA_DEVICES else 0
+    with cp.cuda.Device(_dev):
+        need = w * h * 3
+        if buf is None:
+            if _BUF is None or _BUF.size < need:
+                _BUF = cp.empty((need,), dtype=cp.uint8)
+            buf = _BUF
+        out = buf[:need]
+        bx, by = 16, 16
+        # v5.0.0 (Fase 3): 1 px/thread -> grid = ceil(w/bx) x ceil(h/by)
+        grid = ((w + bx - 1) // bx, (h + by - 1) // by)
+        pal = list(PALETTES).index(_PALETTE)
+        p = prec if prec in ("f32", "f64") else _PREC
+        use64 = (p == "f64") and (_KERNEL_F64 is not None)
+        kernel = _KERNEL_F64 if use64 else _KERNEL_F32
+        fdt = np.float64 if use64 else np.float32
+        args = (out,
+                _PAL_IDX[pal],
+                np.asarray(cx, dtype=fdt),
+                np.asarray(cy, dtype=fdt),
+                np.asarray(half, dtype=fdt),
+                np.asarray(w, dtype=np.int32),
+                np.asarray(h, dtype=np.int32),
+                np.asarray(mi, dtype=np.int32))
+        kernel(grid, (bx, by), args)
+        # v4.16.0: D2H pinned (DMA, memcpyDeviceToHost) con fallback .get().
+        try:
+            pm, host = _pinned_view(w, h)
+            cp.cuda.runtime.memcpy(pm.ptr, out.data.ptr, w * h * 3,
+                                   cp.cuda.runtime.memcpyDeviceToHost)
+            return Image.fromarray(host.reshape((h, w, 3)))
+        except Exception:
+            return Image.fromarray(out.get().reshape((h, w, 3)))
 
 def _compute_gpu_metal(cx, cy, half, w, h, mi, prec=None):
     # Metal e' f32-only (Apple Silicon non supporta 'double').
@@ -1624,9 +1682,10 @@ def hw_name():
                 name = platform.processor() or name
         elif _ACTIVE == "cuda":
             import cupy as cp
-            # dispositivo 0 = quello che CuPy usa di default (con piu' GPU
-            # l'ordine CUDA puo' differire da quello nvidia-smi)
-            name = cp.cuda.runtime.getDeviceProperties(0)["name"]
+            # v5.9.0: device selezionato (dropdown GPU); con piu' GPU
+            # l'ordine CUDA puo' differire da quello nvidia-smi.
+            _dev = _CUDA_DEVICES[_CUDA_DEV][0] if _CUDA_DEVICES else 0
+            name = cp.cuda.runtime.getDeviceProperties(_dev)["name"]
             if isinstance(name, bytes):
                 name = name.decode("utf-8", "replace")
         elif _ACTIVE == "metal":
@@ -1655,6 +1714,16 @@ def _gpu_warmup():
         compute_gpu(CX0, CY0, HALF0, 64, 64, 64, prec="f32")
         if _gpu_supports_f64():
             compute_gpu(CX0, CY0, HALF0, 64, 64, 64, prec="f64")
+    except Exception:
+        pass
+
+def _warmup_cuda_device():
+    # v5.9.0: scalda il device appena selezionato (compilazione kernel +
+    # prime allocazioni fuori dal primo render). Solo se CUDA e' attivo.
+    if _ACTIVE != "cuda":
+        return
+    try:
+        compute_gpu(CX0, CY0, HALF0, 64, 64, 64, prec="f32")
     except Exception:
         pass
 
@@ -1716,6 +1785,19 @@ class MandelbrotApp:
             if not _backend_ok(_be):
                 _b.config(state="disabled")
         self.backend_btns[_ACTIVE].select()
+        # v5.9.0: dropdown scelta GPU (solo se CuPy rileva > 1 device).
+        self.gpu_var = None
+        self.gpu_menu = None
+        if len(_CUDA_DEVICES) > 1:
+            gf = tk.Frame(bk)
+            gf.pack(side="left", padx=(10, 0))
+            tk.Label(gf, text="GPU:").pack(side="left")
+            self.gpu_var = tk.StringVar(value=_cuda_label(_CUDA_DEV))
+            self.gpu_menu = tk.OptionMenu(
+                gf, self.gpu_var,
+                *[_cuda_label(i) for i in range(len(_CUDA_DEVICES))],
+                command=self.choose_gpu_device)
+            self.gpu_menu.pack(side="left", padx=2, pady=3)
         pl = tk.Frame(self.ctl)
         pl.pack(side="left", padx=12)
         tk.Label(pl, text="Palette:").pack(side="left")
@@ -1818,6 +1900,7 @@ class MandelbrotApp:
             "tasti + / - per zoom x2 / x0.5 al centro, r per il reset.\n\n"
             "Motore e precisione: toolbar Motore (CPU / CUDA / Metal / Vulkan) "
             "e Precisione (f32 / f64); i backend non disponibili restano grigi. "
+            "Con piu' GPU CUDA, il dropdown GPU sceglie il device. "
             "CUDA richiede driver NVIDIA + runtime; Vulkan funziona out-of-the-box.\n\n"
             "Iterazioni: Auto calcola mi dallo zoom; in manuale si imposta il "
             "valore (Invio) o lo si cambia di \u00b11000.\n\n"
@@ -2061,6 +2144,34 @@ class MandelbrotApp:
         self._refresh_title()
         self.request_render("motore: " + b.upper())
 
+    def _sync_gpu_menu(self):
+        # v5.9.0: allinea il dropdown al device corrente (load config/reset).
+        if self.gpu_var is not None:
+            self.gpu_var.set(_cuda_label(_CUDA_DEV))
+
+    def _select_cuda_device(self, i):
+        if not set_cuda_device(i):
+            return False
+        self._sync_gpu_menu()
+        return True
+
+    def choose_gpu_device(self, label):
+        # v5.9.0: cambio GPU dal dropdown ("<id>: <nome>").
+        try:
+            _id = int(str(label).split(":", 1)[0])
+        except (TypeError, ValueError):
+            self._sync_gpu_menu()
+            return
+        _pos = next((k for k, (d, _n) in enumerate(_CUDA_DEVICES) if d == _id),
+                    None)
+        if _pos is None or _pos == _CUDA_DEV:
+            self._sync_gpu_menu()
+            return
+        self._select_cuda_device(_pos)
+        self._refresh_title()
+        threading.Thread(target=_warmup_cuda_device, daemon=True).start()
+        self.request_render("gpu: " + _cuda_short_name(_CUDA_DEVICES[_CUDA_DEV][1]))
+
     def choose_palette(self, name):
         self._select_palette(name)
         self.request_render("palette: " + _PALETTE)
@@ -2080,6 +2191,7 @@ class MandelbrotApp:
         self.mi_plus.config(state="disabled")
         self._select_palette("fuoco")
         self._select_backend(_default_backend())
+        self._select_cuda_device(0)
         self._select_precision("f32")
         self._sync_precision_buttons()
         self._refresh_title()
@@ -2275,6 +2387,7 @@ class MandelbrotApp:
         # v5.6.0: salvo il backend ATTIVO per nome (cpu/cuda/metal/vulkan).
         c = dict(precision=_PREC, palette=_PALETTE,
                  backend=_ACTIVE,
+                 cuda_device=_CUDA_DEV,
                  bench=dict(self.bench))
         try:
             d = os.path.dirname(CONFIG_PATH)
@@ -2309,6 +2422,8 @@ class MandelbrotApp:
         if be == "gpu":
             be = _default_backend()
         self._select_backend(be)
+        # v5.9.0: device CUDA persistito (set_cuda_device clamp-a il range).
+        self._select_cuda_device(c.get("cuda_device", 0))
         # la precisione va DOPO il motore: la disponibilita' di f64 dipende
         # dallo slot GPU corrente (set_prec la rifiuta se lo slot non la fa).
         self._select_precision(c.get("precision", "f32"))
@@ -2525,7 +2640,10 @@ class MandelbrotApp:
         if _ACTIVE == "cuda":
             try:
                 import cupy as cp
-                bench_buf = cp.empty((need,), dtype=cp.uint8)
+                # v5.9.0: buffer sul device selezionato (per-thread).
+                _dev = _CUDA_DEVICES[_CUDA_DEV][0] if _CUDA_DEVICES else 0
+                with cp.cuda.Device(_dev):
+                    bench_buf = cp.empty((need,), dtype=cp.uint8)
             except Exception:
                 bench_buf = None
         def render():

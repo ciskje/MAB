@@ -91,6 +91,13 @@ Registro `PALETTES` (fonte unica): ordine = indice kernel (0 fuoco, 1 ghiaccio,
 | metal | sì | mai (f32-only) |
 | vulkan | sì | mai (f32-only) |
 
+- GPU multipla (v5.9.0): se CuPy rileva > 1 device CUDA, la toolbar mostra
+  un dropdown `GPU:` (`<id>: <nome>` da `_CUDA_DEVICES`, default device 0).
+  Render/benchmark/warmup girano sul device scelto via
+  `with cp.cuda.Device(...)` (il current-device CuPy è per-thread); il cambio
+  invalida `_BUF`, aggiorna titolo/stato (`hw_name` sul device attivo) e
+  scalda il nuovo device in background (64x64) se CUDA è attivo. Selezione
+  persistita in config (`cuda_device`, clampata al range).
 - Precisione = settaggio globale unico (default f32). Bottone f64 dinamico
   (`_sync_precision_buttons`, chiamato in `_build_toolbar`/`set_backend`/`reset`;
   `load_config` passa da `_select_backend`/`_select_precision` + sync):
@@ -197,8 +204,9 @@ Sotto solo scarti + gotcha API.
 - `r` = reset; `Ctrl+S` (bind su root) = salva PNG.
 
 ### 8.2 Layout, titolo, status
-- Toolbar: `Motore:` (4 radio) / `Palette:` (check dal registro) /
-  `Precisione:` (`f32`/`f64`) / `Iter:` + `Auto`. Seconda riga: label
+- Toolbar: `Motore:` (4 radio + dropdown `GPU:` se > 1 device CUDA) /
+  `Palette:` (check dal registro) / `Precisione:` (`f32`/`f64`) / `Iter:` +
+  `Auto`. Seconda riga: label
   `Iterazioni:` / `Iterazioni (auto):`, entry (largh. 7, allineata a destra),
   `-1000`/`+1000`, `Benchmark`, `Reset`. Poi canvas, poi status bar.
   Font `TkDefaultFont/TkTextFont/TkMenuFont` 13 pt.
@@ -221,8 +229,9 @@ Sotto solo scarti + gotcha API.
 - `hw_name()` in cache per backend, senza nuove dipendenze; fallback
   `CPU`/`GPU` su errore o nome vuoto: CPU da registro Windows
   (`ProcessorNameString`) / `sysctl machdep.cpu.brand_string` su macOS /
-  `platform.processor()` altrove; CUDA da `getDeviceProperties(0)` (device 0
-  di CuPy; con più GPU l'ordine può differire da `nvidia-smi`); Metal da
+   `platform.processor()` altrove; CUDA da `getDeviceProperties()` sul device
+   selezionato (dropdown GPU, default 0; con più GPU l'ordine può differire
+   da `nvidia-smi`); Metal da
   `dev.name` (se callable va invocato); Vulkan da `adapter.info["device"]`
   (preferenza high-performance).
 - Benchmark: cursore `watch` in `run_benchmark()`, ripristino in
@@ -235,14 +244,14 @@ Sotto solo scarti + gotcha API.
   Dialog benchmark: testo di sistema; accenti OK/KO `#2ea44f`/`#e5534b`,
   divisore `#8a8a8a`; grafico: griglia `#a0a0a0`, assi/divisore `#8a8a8a`.
   Solo UI, nessun effetto sul rendering.
-- Reset: vista + `mi = 200` + auto + palette `fuoco` + backend default + f32.
-  Non tocca benchmark, `view_file`, cache hardware.
+- Reset: vista + `mi = 200` + auto + palette `fuoco` + backend default +
+  device CUDA 0 + f32. Non tocca benchmark, `view_file`, cache hardware.
 
 ## 9. File I/O
 | file | path | chiavi | note |
 |---|---|---|---|
 | zona (JSON indentato) | a scelta, default `mandelbrot_AAAAMMGG_HHMMSS.json` | `app, versione, cx, cy, half, mi, mi_auto` | `Carica` ripristina vista+MI (clamp `half`), rende file corrente (titolo). `Salva zona` voce disabilitata se nessun file corrente; `save_zone()` senza file ricade su `save_as`. PNG usa stesso pattern nome |
-| config | `~/mandelbrot/config.json` | `precision, palette, backend, bench` | vista e `view_file` mai persistiti (vecchi valori ignorati); backend legacy `"gpu"` → default, ignoto → default; salvataggio all'uscita + throttle 1 s (`after(1000)`; `request_render` marca dirty anche per sola vista) |
+| config | `~/mandelbrot/config.json` | `precision, palette, backend, cuda_device, bench` | vista e `view_file` mai persistiti (vecchi valori ignorati); backend legacy `"gpu"` → default, ignoto → default; `cuda_device` clampato al range (default 0); salvataggio all'uscita + throttle 1 s (`after(1000)`; `request_render` marca dirty anche per sola vista) |
 
 - Avvio sempre da default (insieme intero + MI auto); vista precedente solo via
   `Carica zona...`.
@@ -257,8 +266,9 @@ Sotto solo scarti + gotcha API.
 |---|---|---|---|---|---|---|
 | val | -0.7499302568795561 | -0.015139113925433963 | 5.226737155905588e-05 | 960x540 | 8.0 | sempre `auto_mi(half)` = 10915 |
 
-- Esegue nel modo corrente (motore + f32/f64 di toolbar); CUDA usa buffer
-  proprio, Metal/Vulkan output proprio, CPU memoria numpy.
+- Esegue nel modo corrente (motore + f32/f64 di toolbar, GPU selezionata);
+  CUDA usa buffer proprio (allocato sul device scelto), Metal/Vulkan output
+  proprio, CPU memoria numpy.
 - Report: dialog con `rendering/s` grande (42 pt, `#2ea44f`), statistiche
   (n. rendering, ms/render), grafico + griglia parametri (riga `Hardware` da
   `hw_name()`); errore → `BENCHMARK FALLITO` + dettaglio (`#e5534b`).
