@@ -2859,9 +2859,7 @@ class MandelbrotApp:
         # calibrate (dropdown gpu1/gpu2/both).
         if _ACTIVE == "cuda" and len(_CUDA_DEVICES) > 1:
             labs = [_cuda_label(i) for i in range(len(_CUDA_DEVICES))]
-            _r = min(0.9, max(0.1, _CUDA_SPLIT_RATIO))
-            labs.append("Entrambe (split %d/%d)"
-                        % (round(_r * 100), 100 - round(_r * 100)))
+            labs.append("Entrambe (split)")
             return labs
         if _ACTIVE == "vulkan" and len(_VULKAN_ADAPTERS) > 1:
             return [_vulkan_label(i) for i in range(len(_VULKAN_ADAPTERS))]
@@ -2886,6 +2884,9 @@ class MandelbrotApp:
         if getattr(self, "gpu_ratio_menu", None) is not None:
             self.gpu_ratio_menu.destroy()
             self.gpu_ratio_menu = None
+        if getattr(self, "gpu_ratio_lbl", None) is not None:
+            self.gpu_ratio_lbl.destroy()
+            self.gpu_ratio_lbl = None
         if getattr(self, "gpu_ratio_var", None) is not None:
             self.gpu_ratio_var = None
         labels = self._gpu_labels()
@@ -2897,38 +2898,51 @@ class MandelbrotApp:
         self.gpu_menu = tk.OptionMenu(self.gpu_frame, self.gpu_var, *labels,
                                       command=self.choose_gpu_device)
         self.gpu_menu.pack(side="left", padx=2, pady=3)
-        # Bottone ricampiona le GPU + dropdown ratio (solo CUDA + 2+ device).
+        # Bottone ricampiona le GPU + dropdown ratio + label ratio (solo CUDA + 2+).
         if _ACTIVE == "cuda" and len(_CUDA_DEVICES) >= 2:
             self.gpu_ratio_var = tk.StringVar(
                 value=self._ratio_label())
             self.gpu_ratio_menu = tk.OptionMenu(
                 self.gpu_frame, self.gpu_ratio_var,
-                "1/3 2/3", "50/50", "2/3 1/3",
+                "33% 66%", "50% 50%", "66% 33%",
                 command=self._set_split_ratio)
             self.gpu_ratio_menu.pack(side="left", padx=(4, 0), pady=3)
+            self.gpu_ratio_lbl = tk.Label(self.gpu_frame, text=self._ratio_pct())
+            self.gpu_ratio_lbl.pack(side="left", padx=(4, 0), pady=3)
             self.gpu_cal_btn = tk.Button(
                 self.gpu_frame, text="\u21bb", width=2,
                 command=self._recalibrate_split)
             self.gpu_cal_btn.pack(side="left", padx=(2, 0), pady=3)
 
+    def _ratio_pct(self):
+        """Stringa percentuale corrente es. '33/66'."""
+        r = min(0.9, max(0.1, _CUDA_SPLIT_RATIO))
+        p1 = round(r * 100)
+        return "%d/%d" % (p1, 100 - p1)
+
+    def _update_ratio_lbl(self):
+        if getattr(self, "gpu_ratio_lbl", None) is not None:
+            self.gpu_ratio_lbl.config(text=self._ratio_pct())
+
     def _ratio_label(self):
         """Label corrente dal _CUDA_SPLIT_RATIO."""
         r = _CUDA_SPLIT_RATIO
         if abs(r - 1.0/3) < 0.05:
-            return "1/3 2/3"
+            return "33% 66%"
         elif abs(r - 2.0/3) < 0.05:
-            return "2/3 1/3"
-        return "50/50"
+            return "66% 33%"
+        return "50% 50%"
 
     def _set_split_ratio(self, label):
         """Imposta il rapporto split dal dropdown."""
         global _CUDA_SPLIT_RATIO
-        if label == "1/3 2/3":
+        if label == "33% 66%":
             _CUDA_SPLIT_RATIO = 1.0 / 3.0
-        elif label == "2/3 1/3":
+        elif label == "66% 33%":
             _CUDA_SPLIT_RATIO = 2.0 / 3.0
         else:
             _CUDA_SPLIT_RATIO = 0.5
+        self._update_ratio_lbl()
         self._refresh_title()
         self.request_render("split ratio: " + label)
 
@@ -2945,6 +2959,7 @@ class MandelbrotApp:
         _cuda_calibrate_split()
         def _ui():
             self.status.config(text="split: " + _cuda_split_diag())
+            self._update_ratio_lbl()
             self._refresh_title()
             self._sync_gpu_menu()
             self.request_render("split ricalibrato")
