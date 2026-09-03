@@ -226,13 +226,16 @@ Sotto solo scarti + gotcha API.
    iterazioni, palette, file, benchmark), `Novità recenti...` (ultime 10
    modifiche da tupla embedded `HISTORY`, righe versione/data/descrizione),
    separatore, `Informazioni...` (versione, backend/hardware attivi, autore
-   Francesco Ferrara `<occhiobello@gmail.com>`). Dialog `Toplevel` modali
-   centrati via `_modal`. `HISTORY` è embedded (non STORICO commentato, che
+   Francesco Ferrara `<occhiobello@gmail.com>`, diagnostica CPU/Numba da
+   `_numba_diag()`). Dialog `Toplevel` modali centrati via `_modal`. `HISTORY` è embedded (non STORICO commentato, che
    PyInstaller scarta): va aggiornata a ogni bump (voce in testa, max 10).
 - Titolo: `Insieme di Mandelbrot v<VER> - <backend()> (<hw>)`
   + ` - <basename zona>` se presente; ricalcolato a ogni frame in `_show`
   così segue la transizione warmup `single-core` → `multi-core`.
-- Status: `<msg> | <backend> · <hw> | <palette> | render: <N> ms`.
+- Status: `<msg> | <backend> · <hw> | <palette> | render: <N> ms`
+  (+ ` · single-core: motivo in Help > Informazioni` in rosso se la CPU è
+  sul fallback numpy; si auto-cancella al multi-core). Esito warmup in
+  `_NUMBA_STATUS` (import/self-test/compilazione/tempo per precisione).
 - `Entry` disabilitata: `delete`/`insert` sono no-op → riabilitare prima (§12.6).
 
 ### 8.3 Hardware, cursore, tema

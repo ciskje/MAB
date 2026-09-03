@@ -1,11 +1,17 @@
 # ============================================================================
 # Insieme di Mandelbrot - visualizzatore interattivo
-# VERSIONE: 5.9.4
+# VERSIONE: 5.9.5
 # ----------------------------------------------------------------------------
 # REGOLA: ogni modifica incrementa la versione e aggiunge una voce qui sotto
 # (formato: versione - data - descrizione modifiche).
 #
 # STORICO:
+# 5.9.5 - 2026-09-03
+#   - Diagnostica single-core: se la CPU non va in multi-core, ORA SI VEDE
+#     IL PERCHE'. _numba_warmup() registra esito/motivo/tempo in
+#     _NUMBA_STATUS (prima gli except erano muti); status bar col suffisso
+#     "single-core: motivo in Help > Informazioni" in rosso finche' resta
+#     il fallback; dialog Informazioni con blocco CPU/Numba dettagliato.
 # 5.9.4 - 2026-09-03
 #   - UI: finestra default allargata a 1280x720 (sempre 16:9): la toolbar
 #     cresciuta (dropdown GPU) forzava la finestra oltre i 960px e il canvas
@@ -626,13 +632,14 @@ BENCH_REF = (
     ("5070 Ti CUDA (storico)", 350.0),
 )
 
-VERSION = "5.9.4"
+VERSION = "5.9.5"
 
 # Ultime 10 modifiche di versione per Help -> "Novità recenti..."
 # (versione, data, descrizione breve). Fonte embedded: i commenti STORICO
 # non sopravvivono alla build PyInstaller, quindi il dialog legge da qui.
 # REGOLA BUMP: aggiungere la voce nuova in testa e tenere max 10.
 HISTORY = (
+    ("5.9.5", "2026-09-03", "Single-core: ora mostra il perche' (status+Info)."),
     ("5.9.4", "2026-09-03", "Finestra default 1280x720 (16:9)."),
     ("5.9.3", "2026-09-03", "Ref 4070 Super Vulkan corretto a 124."),
     ("5.9.2", "2026-09-03", "Dropdown GPU anche per Vulkan (adapter selezionabile)."),
@@ -642,7 +649,6 @@ HISTORY = (
     ("5.8.12", "2026-09-03", "Help: voce Novità recenti con le ultime 10 modifiche."),
     ("5.8.11", "2026-09-03", "Menu Help con Istruzioni e Informazioni (autore)."),
     ("5.8.10", "2026-09-04", "Etichetta CPU single/multi-core per precisione."),
-    ("5.8.9", "2026-09-03", "Ritenzione dist/: ultime 3 versioni per piattaforma."),
 )
 
 # ---------------- Palette (LUT 256x3 condivisa CPU/GPU) ----------------
@@ -1468,6 +1474,13 @@ def compute_gpu(cx, cy, half, w, h, mi, buf=None, prec=None):
 # Numba distinti; se il self-test di bit-identita' NON passa per una
 # precisione, il fallback numpy resta attivo solo per quella).
 _NUMBA_OK = {"f64": False, "f32": False}
+# v5.9.5: diagnostica del fallback single-core (visibile in Help >
+# Informazioni e come avviso in status bar). "import": "ok" o motivo del
+# fallimento; per precisione: "warmup in corso..." | "ok (multi-core)" |
+# motivo ("self-test..." / "compilazione fallita: ..."); "tempo": secondi
+# del warmup (None se non concluso).
+_NUMBA_STATUS = {"import": "ok", "f64": "warmup in corso...",
+                 "f32": "warmup in corso...", "tempo": None}
 _GEN = np.zeros(1, dtype=np.int32)
 try:
     from numba import njit, prange
@@ -1503,9 +1516,12 @@ try:
                         it[row, col] = i
                         mag[row, col] = z_re * z_re + z_im * z_im
                         break
-except Exception:
+except Exception as ex:
     njit = None
     prange = None
+    # v5.9.5: motivo registrato (prima muto) per la diagnostica in UI.
+    _NUMBA_STATUS["import"] = "numba non importabile: " + str(ex)[:160]
+    _NUMBA_STATUS["f64"] = _NUMBA_STATUS["f32"] = "numba non disponibile"
 
 # Numba assente (import fallito) -> il motore CPU gira sul fallback numpy
 # single-core; lo segnalo nell'etichetta del backend (vedi backend()).
@@ -1577,21 +1593,41 @@ def _numba_selftest(cdt):
     # f64: bit-identita' stretta
     return bool(np.array_equal(mag_numba, mag_ref))
 
+def _numba_diag():
+    """Riga diagnostica CPU/Numba per Help > Informazioni (v5.9.5): se non
+    si va in multi-core, spiega il perche' (da _NUMBA_STATUS)."""
+    if _NUMBA_OK.get("f32") and _NUMBA_OK.get("f64"):
+        t = _NUMBA_STATUS.get("tempo")
+        return "Numba multi-core attivo (f32+f64%s)." % (
+            ", warmup %ss" % t if t is not None else "")
+    parts = []
+    if _NUMBA_STATUS.get("import") != "ok":
+        parts.append(str(_NUMBA_STATUS["import"]))
+    for p in ("f64", "f32"):
+        if not _NUMBA_OK.get(p):
+            parts.append("%s: %s" % (p, _NUMBA_STATUS.get(p, "?")))
+    return "Single-core (numpy). Motivo: " + "; ".join(parts)
+
+
 def _numba_warmup():
     """Compila in background all'avvio i kernel di ENTRAMBE le precisioni
     (f64 e f32; il kernel Numba si auto-specializza sul dtype in ingresso) e
     fa il self-test contro il loop numpy di riferimento, una precisione per
     volta (f64: bit-identita'; f32: it[] esatto + mag[] entro tolleranza —
     vedi _numba_selftest); se il test non passa (o la compilazione fallisce)
-    resta il fallback numpy per quella precisione.
+    resta il fallback numpy per quella precisione. Esito/motivo/tempo in
+    _NUMBA_STATUS (v5.9.5: niente piu' except muti per la diagnostica UI).
     """
+    t0 = time.perf_counter()
     if njit is None:
         return
     for prec, cdt in (("f64", np.complex128), ("f32", np.complex64)):
         fdt = np.float32 if cdt is np.complex64 else np.float64
         try:
             if not _numba_selftest(cdt):
-                continue  # self-test violato: fallback numpy per questa precisione
+                # self-test violato: fallback numpy per questa precisione
+                _NUMBA_STATUS[prec] = "self-test di correttezza fallito"
+                continue
             # warmup: compila il percorso parallelo a dimensioni realistiche
             c2 = np.zeros((64, 64), dtype=cdt)
             d2 = np.zeros((64, 64), dtype=bool)
@@ -1599,8 +1635,10 @@ def _numba_warmup():
             mag2 = np.zeros((64, 64), dtype=fdt)
             _mandel_escape(c2, d2, it2, mag2, 32, 0, 64)
             _NUMBA_OK[prec] = True
-        except Exception:
-            pass
+            _NUMBA_STATUS[prec] = "ok (multi-core)"
+        except Exception as ex:
+            _NUMBA_STATUS[prec] = "compilazione fallita: " + str(ex)[:160]
+    _NUMBA_STATUS["tempo"] = round(time.perf_counter() - t0, 1)
 
 _CPU_WS = {}
 
@@ -2072,6 +2110,9 @@ class MandelbrotApp:
         tk.Label(body, text=f"{backend()} ({hw_name()})").pack(anchor="w")
         tk.Label(body, text="Autore: Francesco Ferrara").pack(anchor="w", pady=(10, 0))
         tk.Label(body, text="Email: occhiobello@gmail.com").pack(anchor="w")
+        # v5.9.5: diagnostica CPU/Numba (perche' single-core?).
+        tk.Label(body, text="CPU: " + _numba_diag(), wraplength=460,
+                 justify="left").pack(anchor="w", pady=(10, 0))
         def chiudi(_e=None):
             win._annullato = False
             win.destroy()
@@ -2460,8 +2501,13 @@ class MandelbrotApp:
         self.photo = ImageTk.PhotoImage(img)
         self.canvas.delete("all")
         self.canvas.create_image(w // 2, h // 2, image=self.photo)
-        self.status.config(text=f"{msg} | {backend()} \u00b7 {hw_name()} | palette: {_PALETTE} | render: {rt*1000:.0f} ms",
-                               foreground=_backend_fg())
+        # v5.9.5: se la CPU resta in single-core, avviso persistente (rosso)
+        # col rimando al motivo (si auto-cancella al passaggio a multi-core).
+        _single = (_ACTIVE == "cpu" and not _NUMBA_OK.get(_PREC))
+        _suffix = (" \u00b7 single-core: motivo in Help > Informazioni"
+                   if _single else "")
+        self.status.config(text=f"{msg} | {backend()} \u00b7 {hw_name()} | palette: {_PALETTE} | render: {rt*1000:.0f} ms{_suffix}",
+                           foreground=ERR_FG if _single else _backend_fg())
         # v5.8.10: il titolo segue il warmup Numba (single->multi a warmup
         # concluso); backend() e' ricalcolato a ogni frame, il titolo no.
         self._refresh_title()
