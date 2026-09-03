@@ -1,11 +1,16 @@
 # ============================================================================
 # Insieme di Mandelbrot - visualizzatore interattivo
-# VERSIONE: 5.9.5
+# VERSIONE: 5.9.6
 # ----------------------------------------------------------------------------
 # REGOLA: ogni modifica incrementa la versione e aggiunge una voce qui sotto
 # (formato: versione - data - descrizione modifiche).
 #
 # STORICO:
+# 5.9.6 - 2026-09-03
+#   - Pulsante Foto: ricalcola la vista a 2x per lato (4x pixel) e la
+#     mostra con antialiasing (media 2x2 su RGB, uguale per tutti i
+#     backend, in background con cursore hourglass); foto scartata se
+#     la vista cambia durante il calcolo. Ctrl+S la salva.
 # 5.9.5 - 2026-09-03
 #   - Diagnostica single-core: se la CPU non va in multi-core, ORA SI VEDE
 #     IL PERCHE'. _numba_warmup() registra esito/motivo/tempo in
@@ -632,13 +637,14 @@ BENCH_REF = (
     ("5070 Ti CUDA (storico)", 350.0),
 )
 
-VERSION = "5.9.5"
+VERSION = "5.9.6"
 
 # Ultime 10 modifiche di versione per Help -> "Novità recenti..."
 # (versione, data, descrizione breve). Fonte embedded: i commenti STORICO
 # non sopravvivono alla build PyInstaller, quindi il dialog legge da qui.
 # REGOLA BUMP: aggiungere la voce nuova in testa e tenere max 10.
 HISTORY = (
+    ("5.9.6", "2026-09-03", "Pulsante Foto: vista a 2x con antialiasing (hourglass)."),
     ("5.9.5", "2026-09-03", "Single-core: ora mostra il perche' (status+Info)."),
     ("5.9.4", "2026-09-03", "Finestra default 1280x720 (16:9)."),
     ("5.9.3", "2026-09-03", "Ref 4070 Super Vulkan corretto a 124."),
@@ -648,7 +654,6 @@ HISTORY = (
     ("5.8.13", "2026-09-03", "Colore UI: status e accento per motore, errori in rosso."),
     ("5.8.12", "2026-09-03", "Help: voce Novità recenti con le ultime 10 modifiche."),
     ("5.8.11", "2026-09-03", "Menu Help con Istruzioni e Informazioni (autore)."),
-    ("5.8.10", "2026-09-04", "Etichetta CPU single/multi-core per precisione."),
 )
 
 # ---------------- Palette (LUT 256x3 condivisa CPU/GPU) ----------------
@@ -2003,6 +2008,8 @@ class MandelbrotApp:
         self.bench_btn.pack(side="right", padx=(16, 8), pady=3)
         self.reset_btn = tk.Button(self.btns, text="Reset", command=self.reset)
         self.reset_btn.pack(side="right", padx=2, pady=3)
+        self.photo_btn = tk.Button(self.btns, text="Foto", command=self.take_photo)
+        self.photo_btn.pack(side="right", padx=2, pady=3)
 
     def _build_canvas_status(self):
         # --- barra accento, canvas al centro, status in fondo ---
@@ -2060,8 +2067,10 @@ class MandelbrotApp:
             "CUDA richiede driver NVIDIA + runtime; Vulkan funziona out-of-the-box.\n\n"
             "Iterazioni: Auto calcola mi dallo zoom; in manuale si imposta il "
             "valore (Invio) o lo si cambia di \u00b11000.\n\n"
-            "Palette, file e benchmark: palette dal registro (default fuoco); "
-            "menu File per salvare PNG (Ctrl+S) e zone JSON; Benchmark esegue "
+            "Palette, file, foto e benchmark: palette dal registro (default fuoco); "
+            "menu File per salvare PNG (Ctrl+S) e zone JSON; Foto ricalcola la "
+            "vista a 2x per lato e la mostra con antialiasing (media 2x2, da non "
+            "toccare durante il calcolo); Benchmark esegue "
             "il test standardizzato di 8 s nella vista corrente."
         )
         tk.Label(body, text=text, wraplength=460, justify="left").pack(anchor="w", pady=(8, 0))
@@ -2423,6 +2432,9 @@ class MandelbrotApp:
         self._bench_running = False
         self._bench_result = None
         self._bench_finished = False
+        self._photo_running = False
+        self._photo_result = None
+        self._photo_finished = False
         self.root.after(30, self._poll)
         self.root.after(1000, self._flush_config)
 
@@ -2491,6 +2503,10 @@ class MandelbrotApp:
             self._bench_finished = False
             count, secs, err = self._bench_result
             self._bench_done(count, secs, err)
+        if self._photo_finished:
+            self._photo_finished = False
+            img, view, gen, rt, err = self._photo_result
+            self._photo_done(img, view, gen, rt, err)
         self.root.after(30, self._poll)
 
     def _show(self, img, msg, rt=0.0):
@@ -2906,6 +2922,56 @@ class MandelbrotApp:
         self.root.config(cursor="")
         self.status.config(text="benchmark completato")
         self._bench_result_dialog(count, secs, err)
+
+    def take_photo(self):
+        # v5.9.6: foto antialiasing: ricalcola la vista corrente a 2x per
+        # lato (4x pixel) e mostra la media 2x2 dei pixel vicini. Eseguita
+        # in background (come il benchmark): cursore hourglass, UI viva.
+        # Per vedere la foto bisogna aspettare senza toccare: se la vista
+        # cambia durante il calcolo, la foto stantia viene scartata.
+        if getattr(self, "_photo_running", False):
+            self.status.config(text="foto gia' in corso")
+            return
+        w, h = self.canvas_size()
+        view = (self.cx, self.cy, self.half, self.eff_mi())
+        self._photo_running = True
+        self._photo_btn.config(state="disabled")
+        self.root.config(cursor="watch")
+        self.status.config(text="foto in corso (antialiasing 2x, non toccare)...")
+        threading.Thread(target=self._photo_worker, args=(view, w, h, self._gen),
+                         daemon=True).start()
+
+    def _photo_worker(self, view, w, h, gen):
+        # Box-filter 2x2 sullo spazio RGB: unico code-path per tutti i
+        # backend (la GPU colora in-kernel, nessun it/mag su host).
+        # my_gen=0 -> nessuna cancellazione durante il calcolo (il
+        # risultato stantio e' scartato in _photo_done, non qui).
+        t0 = time.perf_counter()
+        try:
+            big = compute(view[0], view[1], view[2], 2 * w, 2 * h, view[3])
+            if big.size != (2 * w, 2 * h):
+                big = big.resize((2 * w, 2 * h), Image.BILINEAR)
+            a = np.asarray(big)
+            small = (a.reshape(h, 2, w, 2, 3).mean(axis=(1, 3)) + 0.5).astype(np.uint8)
+            img = Image.fromarray(small, "RGB")
+            self._photo_result = (img, view, gen, time.perf_counter() - t0, None)
+        except Exception as ex:
+            self._photo_result = (None, view, gen, 0.0, str(ex))
+        self._photo_finished = True
+
+    def _photo_done(self, img, view, gen, rt, err):
+        # Unico punto di uscita (anche in errore): ripristina sempre
+        # cursore e pulsante, come _bench_done.
+        self._photo_result = None
+        self._photo_running = False
+        self._photo_btn.config(state="normal")
+        self.root.config(cursor="")
+        if err:
+            self.status.config(text=f"foto fallita: {err}")
+        elif _GEN[0] != gen or (self.cx, self.cy, self.half, self.eff_mi()) != view:
+            self.status.config(text="foto scartata (vista cambiata)")
+        else:
+            self._show(img, "foto antialiasing 2x", rt)
 
 
 def main():

@@ -20,7 +20,7 @@ build → gotchas (§12.1–§12.6).
   Backend non disponibili restano visibili in toolbar ma disabilitati (grigi).
 - Render su thread worker, UI mai bloccata (§7).
 - Metodi di `MandelbrotApp` raggruppati per funzione: UI, vista, controlli,
-  pipeline, file, benchmark.
+  pipeline, file, foto, benchmark.
 - Versione in due punti che devono coincidere: header `# VERSIONE: X.Y.Z`
   (letto da `mandelbrot.spec`/`build_app.py` per EXE/.app/zip) e costante
   runtime `VERSION = "X.Y.Z"` (titolo + JSON zona). Incremento/STORICO: vedi
@@ -218,12 +218,12 @@ Sotto solo scarti + gotcha API.
   motore attivo, se > 1) / `Palette:` (check dal registro) / `Precisione:`
   (`f32`/`f64`) / `Iter:` + `Auto`. Seconda riga: label
   `Iterazioni:` / `Iterazioni (auto):`, entry (largh. 7, allineata a destra),
-  `-1000`/`+1000`, `Benchmark`, `Reset`. Poi canvas, poi status bar.
+  `-1000`/`+1000`, `Foto`, `Benchmark`, `Reset`. Poi canvas, poi status bar.
   Font `TkDefaultFont/TkTextFont/TkMenuFont` 13 pt.
    Menu File: `Salva immagine... (Ctrl+S)`, `Carica zona...`, `Salva zona`,
    `Salva zona con nome...`, separatore, `Esci`.
    Menu Help: `Istruzioni...` (guida rapida: navigazione, motore/precisione,
-   iterazioni, palette, file, benchmark), `Novità recenti...` (ultime 10
+   iterazioni, palette, file, foto, benchmark), `Novità recenti...` (ultime 10
    modifiche da tupla embedded `HISTORY`, righe versione/data/descrizione),
    separatore, `Informazioni...` (versione, backend/hardware attivi, autore
    Francesco Ferrara `<occhiobello@gmail.com>`, diagnostica CPU/Numba da
@@ -249,6 +249,13 @@ Sotto solo scarti + gotcha API.
    (`VulkanBackend.name`, default ex high-performance).
 - Benchmark: cursore `watch` in `run_benchmark()`, ripristino in
   `_bench_done()` (unico punto di uscita, anche su errore).
+- Foto: ricalcola la vista a 2x per lato (4x pixel) in thread dedicato e
+  mostra la media 2x2 su RGB (`take_photo`/`_photo_worker`/`_photo_done`;
+  box-filter sull'output, unico code-path per tutti i backend dato che la
+  GPU colora in-kernel); cursore `watch` durante il calcolo, ripristino in
+  `_photo_done()` (unico punto di uscita, anche su errore); risultato
+  scartato se la vista cambia nel frattempo (confronto vista + `_GEN`);
+  `self.pil` aggiornata così `Ctrl+S` salva la versione antialiased.
 - Tema: Button/Checkbutton/Radiobutton nativi (mai colorati: su macOS
   degradano a flat illeggibili, lezione 5.4.2); colore solo su Label/Frame:
   status bar e barra accento (3px sopra il canvas) nel colore del motore
