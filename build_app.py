@@ -51,9 +51,11 @@ def keep_last_n_dist(n=KEEP_N):
         return
     items = []
     for fn in os.listdir(d):
-        m = re.match(r"mandelbrot-v(\d+)\.(\d+)\.(\d+)-(win64|macos)\.", fn, re.IGNORECASE)
+        # v6.0: accetta anche versioni a 2 parti (es. v6.0 oltre a X.Y.Z);
+        # il patch mancante vale 0 ai fini dell'ordinamento.
+        m = re.match(r"mandelbrot-v(\d+)\.(\d+)(?:\.(\d+))?-(win64|macos)\.", fn, re.IGNORECASE)
         if m:
-            ver = (int(m.group(1)), int(m.group(2)), int(m.group(3)))
+            ver = (int(m.group(1)), int(m.group(2)), int(m.group(3) or 0))
             plat = m.group(4).lower()
             items.append((ver, fn, plat))
     if not items:

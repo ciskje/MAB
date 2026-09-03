@@ -1,11 +1,17 @@
 # ============================================================================
 # Insieme di Mandelbrot - visualizzatore interattivo
-# VERSIONE: 5.11.1
+# VERSIONE: 6.0
 # ----------------------------------------------------------------------------
 # REGOLA: ogni modifica incrementa la versione e aggiunge una voce qui sotto
 # (formato: versione - data - descrizione modifiche).
 #
 # STORICO:
+# 6.0 - 2026-09-03
+#   - Ricalcola: pulsante prima del dropdown ([Ricalcola][NxN]); la
+#     selezione NxN ricalcola subito (trace) e resta persistente (default
+#     1x1): tutti i calcoli successivi (full dopo pan/zoom/MI) usano quella
+#     scala; richieste durante un ricalcolo in corso accodate (pending
+#     latest-wins, niente piu' 'gia in corso' perso).
 # 5.11.1 - 2026-09-03
 #   - Bugfix CUDA (cudaErrorIllegalAddress sul ricalcolo NxN grande): il
 #     kernel controllava solo 'col >= w' e non 'row >= h'; i thread di
@@ -682,13 +688,14 @@ BENCH_REF = (
     ("5070 Ti CUDA (storico)", 350.0),
 )
 
-VERSION = "5.11.1"
+VERSION = "6.0"
 
 # Ultime 10 modifiche di versione per Help -> "Novità recenti..."
 # (versione, data, descrizione breve). Fonte embedded: i commenti STORICO
 # non sopravvivono alla build PyInstaller, quindi il dialog legge da qui.
 # REGOLA BUMP: aggiungere la voce nuova in testa e tenere max 10.
 HISTORY = (
+    ("6.0", "2026-09-03", "Ricalcola prima del dropdown, scala persistente con ricalcolo immediato."),
     ("5.11.1", "2026-09-03", "Bugfix CUDA: guardia riga nel kernel (no piu' illegal access su NxN grande)."),
     ("5.10.2", "2026-09-03", "Preview draft a 1/8 solo su CPU (GPU a 1/4)."),
     ("5.10.1", "2026-09-03", "Rinomina Foto NxN in Ricalcola NxN."),
@@ -697,7 +704,6 @@ HISTORY = (
     ("5.9.7", "2026-09-03", "Bugfix Foto: typo nome pulsante, ora funziona."),
     ("5.9.6", "2026-09-03", "Pulsante Foto: vista a 2x con antialiasing (hourglass)."),
     ("5.9.5", "2026-09-03", "Single-core: ora mostra il perche' (status+Info)."),
-    ("5.9.4", "2026-09-03", "Finestra default 1280x720 (16:9)."),
 )
 
 # ---------------- Palette (LUT 256x3 condivisa CPU/GPU) ----------------
@@ -2057,15 +2063,20 @@ class MandelbrotApp:
         self.bench_btn.pack(side="right", padx=(16, 8), pady=3)
         self.reset_btn = tk.Button(self.btns, text="Reset", command=self.reset)
         self.reset_btn.pack(side="right", padx=2, pady=3)
-        self.recalc_btn = tk.Button(self.btns, text="Ricalcola", command=self.recalc_scaled)
-        self.recalc_btn.pack(side="right", padx=2, pady=3)
         # v5.11.0: scala esplicita sempre visibile (1x1 = vista corrente,
         # NxN = antialiasing NxN). Sostituisce i 3 pulsanti separati
         # (Ricalcola + Ricalcola 2x2/4x4): un solo pulsante + dropdown.
-        self.recalc_var = tk.StringVar(value="2x2")
+        # v6.0: dropdown impacchettato PRIMA del pulsante cosi' a video
+        # sta [Ricalcola][NxN] (pack side=right impila da destra); default
+        # 1x1 (interattivo leggero); la selezione ricalcola subito (trace)
+        # e resta persistente: tutti i calcoli successivi usano quella scala.
+        self.recalc_var = tk.StringVar(value="1x1")
         self.recalc_menu = tk.OptionMenu(self.btns, self.recalc_var,
                                          "1x1", "2x2", "4x4", "8x8")
         self.recalc_menu.pack(side="right", padx=2, pady=3)
+        self.recalc_btn = tk.Button(self.btns, text="Ricalcola", command=self.recalc_scaled)
+        self.recalc_btn.pack(side="right", padx=2, pady=3)
+        self.recalc_var.trace_add("write", lambda *_: self.recalc_scaled())
 
     def _build_canvas_status(self):
         # --- barra accento, canvas al centro, status in fondo ---
@@ -2126,10 +2137,11 @@ class MandelbrotApp:
             "Iterazioni: Auto calcola mi dallo zoom; in manuale si imposta il "
             "valore (Invio) o lo si cambia di \u00b11000.\n\n"
             "Palette, file, foto e benchmark: palette dal registro (default fuoco); "
-            "menu File per salvare PNG (Ctrl+S) e zone JSON; Ricalcola con scala "
-            "1x1 (vista corrente) / 2x2 / 4x4 / 8x8: NxN ricalcola la vista a N "
-            "volte per lato e la mostra con antialiasing (media NxN, da non "
-            "toccare durante il calcolo; 4x4 = 16x pixel, 8x8 = 64x pixel, "
+            "menu File per salvare PNG (Ctrl+S) e zone JSON; Ricalcola + scala "
+            "1x1 (default, vista corrente) / 2x2 / 4x4 / 8x8: la selezione "
+            "ricalcola subito e resta attiva (ogni vista successiva e' "
+            "calcolata in quel modo); NxN ricalcola a N volte per lato con "
+            "antialiasing (media NxN; 4x4 = 16x pixel, 8x8 = 64x pixel, "
             "molto piu' lenti; oltre il tetto di memoria vengono rifiutati); "
             "Benchmark esegue "
             "il test standardizzato di 8 s nella vista corrente."
@@ -2529,6 +2541,7 @@ class MandelbrotApp:
         self._photo_running = False
         self._photo_result = None
         self._photo_finished = False
+        self._photo_pending = False
         self.root.after(30, self._poll)
         self.root.after(1000, self._flush_config)
 
@@ -2547,11 +2560,24 @@ class MandelbrotApp:
         self._submit(view, max(w // div, 16), max(h // div, 16))
         self._full_timer = self.root.after(500, lambda: self._maybe_full(view))
 
+    def _recalc_n(self):
+        # v6.0: scala persistente dal dropdown (1 = interattivo, N>1 =
+        # antialiasing NxN per tutti i calcoli successivi).
+        try:
+            return max(1, min(8, int(self.recalc_var.get().split("x")[0])))
+        except Exception:
+            return 1
+
     def _maybe_full(self, view):
         self._full_timer = None
         if (self.cx, self.cy, self.half, self.eff_mi()) == view:
-            w, h = self.canvas_size()
-            self._submit(view, w, h)
+            # v6.0: con scala NxN persistente il full va in antialiasing
+            # (la preview draft resta leggera per l'interazione).
+            if self._recalc_n() > 1:
+                self.take_photo(self._recalc_n())
+            else:
+                w, h = self.canvas_size()
+                self._submit(view, w, h)
 
     def _submit(self, view, w, h):
         # v5.0.0: ogni nuovo job e' una nuova "generazione"; il render CPU in
@@ -3029,10 +3055,9 @@ class MandelbrotApp:
         # v5.11.0: dispatcher del pulsante unico "Ricalcola" + dropdown
         # esplicito 1x1/2x2/4x4/8x8. 1x1 = vista corrente (pipeline
         # interattiva), NxN = antialiasing in background (take_photo).
-        try:
-            n = int(self.recalc_var.get().split("x")[0])
-        except Exception:
-            n = 1
+        # v6.0: chiamato anche dal trace sul dropdown (selezione =
+        # ricalcolo immediato); legge la scala persistente via _recalc_n.
+        n = self._recalc_n()
         if n <= 1:
             self.recalc()
         else:
@@ -3055,8 +3080,11 @@ class MandelbrotApp:
         # v5.11.0: scala 1x1/2x2/4x4/8x8 dal dropdown unico + guardia memoria
         # (rifiuto prima di allocare) + w,h nello snapshot stantio (un resize
         # durante il calcolo scarta invece di mostrare uno stirato NEAREST).
+        # v6.0: se un ricalcolo e' gia' in corso, la richiesta non si perde
+        # (pending latest-wins: _photo_done rilancia sulla vista corrente).
         if getattr(self, "_photo_running", False):
-            self.status.config(text="ricalcolo gia' in corso")
+            self._photo_pending = True
+            self.status.config(text="ricalcolo accodato (parte appena pronto)...")
             return
         try:
             n = int(n)
@@ -3118,10 +3146,16 @@ class MandelbrotApp:
     def _photo_done(self, img, view, n, rt, err):
         # Unico punto di uscita (anche in errore): ripristina sempre
         # cursore e pulsanti, come _bench_done.
+        # v6.0: se durante il calcolo e' arrivata un'altra richiesta
+        # (pending), rilancia sulla vista corrente con la scala persistente.
         self._photo_result = None
         self._photo_running = False
         self.recalc_btn.config(state="normal")
         self.root.config(cursor="")
+        if self._photo_pending:
+            self._photo_pending = False
+            self.recalc_scaled()
+            return
         if err:
             self.status.config(text=f"ricalcolo fallito: {err}")
         elif (self.cx, self.cy, self.half, self.eff_mi(),

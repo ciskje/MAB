@@ -225,8 +225,8 @@ Sotto solo scarti + gotcha API.
   motore attivo, se > 1) / `Palette:` (check dal registro) / `Precisione:`
   (`f32`/`f64`) / `Iter:` + `Auto`. Seconda riga: label
   `Iterazioni:` / `Iterazioni (auto):`, entry (largh. 7, allineata a destra),
-  `-1000`/`+1000`, dropdown scala `1x1`/`2x2`/`4x4`/`8x8` + `Ricalcola`,
-  `Benchmark`, `Reset`. Poi canvas, poi status bar.
+  `-1000`/`+1000`, `Ricalcola` + dropdown scala `1x1`/`2x2`/`4x4`/`8x8`
+  (default `1x1`), `Benchmark`, `Reset`. Poi canvas, poi status bar.
   Font `TkDefaultFont/TkTextFont/TkMenuFont` 13 pt.
    Menu File: `Salva immagine... (Ctrl+S)`, `Carica zona...`, `Salva zona`,
    `Salva zona con nome...`, separatore, `Esci`.
@@ -257,11 +257,15 @@ Sotto solo scarti + gotcha API.
    (`VulkanBackend.name`, default ex high-performance).
 - Benchmark: cursore `watch` in `run_benchmark()`, ripristino in
   `_bench_done()` (unico punto di uscita, anche su errore).
-- Ricalcola con scala (dropdown esplicito `1x1`/`2x2`/`4x4`/`8x8` +
-  pulsante unico `Ricalcola`, dispatcher `recalc_scaled()`): `1x1` rifa il
-  rendering della vista corrente (`request_render`); NxN ricalcola la vista
-  a NxN per lato (2x2 = 4x pixel, 4x4 = 16x, 8x8 = 64x, molto piu' lenti)
-  in thread dedicato e mostra la media NxN su RGB (`take_photo(n)`/`_photo_worker`/`_photo_done`;
+- Ricalcola con scala (pulsante `Ricalcola` + dropdown esplicito
+  `1x1`/`2x2`/`4x4`/`8x8`, default `1x1`, dispatcher `recalc_scaled()`):
+  la selezione ricalcola subito (trace su `recalc_var`) e resta persistente
+  (`_recalc_n()`): `1x1` rifa il rendering della vista corrente
+  (`request_render`); NxN ricalcola la vista a NxN per lato. Con scala NxN
+  anche il full dopo pan/zoom/MI va in antialiasing (`_maybe_full` chiama
+  `take_photo(n)`; la preview draft resta leggera). Richieste durante un
+  ricalcolo in corso accodate (`_photo_pending`, latest-wins: `_photo_done`
+  rilancia sulla vista corrente).
   box-filter sull'output, unico code-path per tutti i backend dato che la
   GPU colora in-kernel); cursore `watch` durante il calcolo, ripristino in
   `_photo_done()` (unico punto di uscita, anche su errore); all'avvio
@@ -349,7 +353,8 @@ CUDA (solo per CUDA; Vulkan bundled).
   `collect_all(wgpu/cffi)`, `libomp.dylib` da `torch/lib`, `BUNDLE` (icona
   `.icns`, bundle_id, plist).
 - Ritenzione: `KEEP_N = 3` versioni per piattaforma in `dist/` (zip e dmg
-  separatamente; rimozione automatica delle più vecchie per X.Y.Z).
+  separatamente; rimozione automatica delle più vecchie per numero di
+  versione, anche a 2 parti es. `v6.0`).
 - Icona `make_icon.py`: render 1024x1024 (CPU f64, `termal`, `mi = 800`) →
   `icon_src.png` + `mandelbrot.ico` (16,24,32,48,64,128,256) + su macOS
   `mandelbrot.icns` via Pillow. Versione distributivi dall'header `# VERSIONE`
