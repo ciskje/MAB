@@ -2435,11 +2435,10 @@ class MandelbrotApp:
         self.backend_btns[_ACTIVE].select()
         # v5.9.0/v5.9.2: dropdown scelta GPU: contenuto per motore attivo
         # (device CUDA / adapter Vulkan), visibile solo se > 1.
-        # v6.2.5: nella seconda riga (self.btns).
-        self.gpu_frame = tk.Frame(self.btns)
-        tk.Label(self.gpu_frame, text="GPU:").pack(side="left")
+        # v6.2.5: nella seconda riga (self.btns), creato dopo.
         self.gpu_var = None
         self.gpu_menu = None
+        self.gpu_cal_btn = None
         pl = tk.Frame(self.ctl)
         pl.pack(side="left", padx=12)
         tk.Label(pl, text="Palette:").pack(side="left")
@@ -2490,6 +2489,8 @@ class MandelbrotApp:
         self.reset_btn = tk.Button(self.btns, text="Reset", command=self.reset)
         self.reset_btn.pack(side="right", padx=2, pady=3)
         # v6.2.5: GPU selettore nella seconda riga (a destra, prima di Benchmark).
+        self.gpu_frame = tk.Frame(self.btns)
+        tk.Label(self.gpu_frame, text="GPU:").pack(side="left")
         self._refresh_gpu_menu()
         # v5.11.0: scala esplicita sempre visibile (1x1 = vista corrente,
         # NxN = antialiasing NxN). Sostituisce i 3 pulsanti separati
