@@ -1,11 +1,20 @@
 # ============================================================================
 # Insieme di Mandelbrot - visualizzatore interattivo
-# VERSIONE: 5.11.0
+# VERSIONE: 5.11.1
 # ----------------------------------------------------------------------------
 # REGOLA: ogni modifica incrementa la versione e aggiunge una voce qui sotto
 # (formato: versione - data - descrizione modifiche).
 #
 # STORICO:
+# 5.11.1 - 2026-09-03
+#   - Bugfix CUDA (cudaErrorIllegalAddress sul ricalcolo NxN grande): il
+#     kernel controllava solo 'col >= w' e non 'row >= h'; i thread di
+#     bordo in y scrivevano fuori bounds. Su frame piccoli l'overrun
+#     finiva nella slack di _BUF (silente), sul ricalcolo grande (_BUF
+#     esatto) diventava illegal access. Ora guardia su entrambi gli assi
+#     come Metal/Vulkan. NOTA: chi ha preso l'errore deve riavviare l'app
+#     una volta (il context CUDA dopo un illegal access resta avvelenato
+#     finche' il processo non riparte).
 # 5.11.0 - 2026-09-03
 #   - Ricalcola unico con dropdown esplicito 1x1/2x2/4x4/8x8 (sostituisce i
 #     3 pulsanti separati; 1x1 = vista corrente via pipeline, NxN =
@@ -673,14 +682,14 @@ BENCH_REF = (
     ("5070 Ti CUDA (storico)", 350.0),
 )
 
-VERSION = "5.11.0"
+VERSION = "5.11.1"
 
 # Ultime 10 modifiche di versione per Help -> "Novità recenti..."
 # (versione, data, descrizione breve). Fonte embedded: i commenti STORICO
 # non sopravvivono alla build PyInstaller, quindi il dialog legge da qui.
 # REGOLA BUMP: aggiungere la voce nuova in testa e tenere max 10.
 HISTORY = (
-    ("5.11.0", "2026-09-03", "Ricalcola unico con scala 1x1/2x2/4x4/8x8 e guardia memoria."),
+    ("5.11.1", "2026-09-03", "Bugfix CUDA: guardia riga nel kernel (no piu' illegal access su NxN grande)."),
     ("5.10.2", "2026-09-03", "Preview draft a 1/8 solo su CPU (GPU a 1/4)."),
     ("5.10.1", "2026-09-03", "Rinomina Foto NxN in Ricalcola NxN."),
     ("5.10.0", "2026-09-03", "Foto 2x2 + Foto 4x4 (NxN) e pulsante Ricalcola."),
@@ -689,7 +698,6 @@ HISTORY = (
     ("5.9.6", "2026-09-03", "Pulsante Foto: vista a 2x con antialiasing (hourglass)."),
     ("5.9.5", "2026-09-03", "Single-core: ora mostra il perche' (status+Info)."),
     ("5.9.4", "2026-09-03", "Finestra default 1280x720 (16:9)."),
-    ("5.9.3", "2026-09-03", "Ref 4070 Super Vulkan corretto a 124."),
 )
 
 # ---------------- Palette (LUT 256x3 condivisa CPU/GPU) ----------------
@@ -770,7 +778,12 @@ __device__ __forceinline__ void process_pixel(
     const unsigned char* lut,
     unsigned char* __restrict__ out)
 {
-    if (col >= w) return;
+    // v5.11.1: guardia anche su row (prima solo col): i blocchi di bordo
+    // hanno ty >= h e scrivevano fuori bounds (out + (row*w+col)*3).
+    // Su frame piccoli l'overrun finiva nella slack di _BUF e passava
+    // inosservato; sul ricalcolo NxN grande (_BUF esatto) diventava
+    // cudaErrorIllegalAddress. Metal/Vulkan avevano gia' entrambe le guardie.
+    if (col >= w || row >= h) return;
     @@T@@ x0 = cx + half * ((@@T@@)(2 * col - w) / (@@T@@)w);
     @@T@@ y0 = cy + half * ((@@T@@)h / (@@T@@)w) * ((@@T@@)(2 * row - h) / (@@T@@)h);
     // Interior analitico: bulbo periodica-2 + cardioide principale

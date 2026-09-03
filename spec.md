@@ -138,7 +138,11 @@ Sotto solo scarti + gotcha API.
 ### 6.2 CUDA (CuPy `RawKernel`)
 - 1 px/thread, `__launch_bounds__(256)`, block 16x16, grid
   `(ceil(w/16), ceil(h/16))`, `options=("--use_fast_math",)`; 2 varianti
-  f32/f64 dalla stessa sorgente; NVRTC lazy (no `-O3`).
+  f32/f64 dalla stessa sorgente; NVRTC lazy (no `-O3`). Guardia bounds su
+  entrambi gli assi (`col >= w || row >= h`, come Metal/Vulkan): senza il
+  check su `row` i thread di bordo in y scrivevano fuori `out`
+  (`cudaErrorIllegalAddress` sul ricalcolo NxN grande, silente sui frame
+  piccoli per la slack di `_BUF`).
 - Scalari = array numpy size-1; indice palette preallocato (`_PAL_IDX`);
   `np.asarray` su array CuPy vietato → `.get()`.
 - D2H pinned: `PinnedMemory(size)` + `runtime.memcpy(..., memcpyDeviceToHost)`
