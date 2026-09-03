@@ -1,11 +1,14 @@
 # ============================================================================
 # Insieme di Mandelbrot - visualizzatore interattivo
-# VERSIONE: 6.2.4
+# VERSIONE: 6.2.5
 # ----------------------------------------------------------------------------
 # REGOLA: ogni modifica incrementa la versione e aggiunge una voce qui sotto
 # (formato: versione - data - descrizione modifiche).
 #
 # STORICO:
+# 6.2.5 - 2026-09-03
+#   - Pulsante ricampiona (\u21bb) accanto al dropdown GPU: rilancia
+#     calibrazione + parity in background, aggiorna status/titolo.
 # 6.2.4 - 2026-09-03
 #   - Benchmark usa lo split (Entrambe) quando attivo: non passa piu' buf
 #     dedicato, dispatcha sullo stesso percorso del render interattivo.
@@ -830,13 +833,14 @@ BENCH_REF = (
     ("5070 Ti CUDA (storico)", 350.0),
 )
 
-VERSION = "6.2.4"
+VERSION = "6.2.5"
 
 # Ultime 10 modifiche di versione per Help -> "Novità recenti..."
 # (versione, data, descrizione breve). Fonte embedded: i commenti STORICO
 # non sopravvivono alla build PyInstaller, quindi il dialog legge da qui.
 # REGOLA BUMP: aggiungere la voce nuova in testa e tenere max 10.
 HISTORY = (
+    ("6.2.5", "2026-09-03", "Pulsante ricampiona split (calibrazione+parity on-demand)."),
     ("6.2.4", "2026-09-03", "Benchmark usa lo split (Entrambe) quando attivo, come il render."),
     ("6.2.3", "2026-09-03", "Fix split CUDA: output locale alla banda (row0 solo per il calcolo)."),
     ("6.2.2", "2026-09-03", "Parity split con pattern-match sulla banda 2 (indagine seam)."),
@@ -846,7 +850,6 @@ HISTORY = (
     ("6.1.1", "2026-09-03", "Benchmark in esclusiva GPU anche vs ricalcolo NxN (conteggi stabili)."),
     ("6.1", "2026-09-03", "Ricalcolo NxN: memoria misurata davvero (VRAM/RAM), via tetto statico."),
     ("6.0", "2026-09-03", "Ricalcola prima del dropdown, scala persistente con ricalcolo immediato."),
-    ("5.11.1", "2026-09-03", "Bugfix CUDA: guardia riga nel kernel (no piu' illegal access su NxN grande)."),
 )
 
 # ---------------- Palette (LUT 256x3 condivisa CPU/GPU) ----------------
@@ -2875,6 +2878,10 @@ class MandelbrotApp:
             self.gpu_menu.destroy()
             self.gpu_menu = None
             self.gpu_var = None
+        # v6.2.5: rimuovi eventuale bottone calibra (lo ricrei se serve).
+        if getattr(self, "gpu_cal_btn", None) is not None:
+            self.gpu_cal_btn.destroy()
+            self.gpu_cal_btn = None
         labels = self._gpu_labels()
         if not labels:
             self.gpu_frame.pack_forget()
@@ -2884,6 +2891,30 @@ class MandelbrotApp:
         self.gpu_menu = tk.OptionMenu(self.gpu_frame, self.gpu_var, *labels,
                                       command=self.choose_gpu_device)
         self.gpu_menu.pack(side="left", padx=2, pady=3)
+        # Bottone ricampiona le GPU (visibile solo se CUDA + 2+ device).
+        if _ACTIVE == "cuda" and len(_CUDA_DEVICES) >= 2:
+            self.gpu_cal_btn = tk.Button(
+                self.gpu_frame, text="\u21bb", width=2,
+                command=self._recalibrate_split)
+            self.gpu_cal_btn.pack(side="left", padx=(2, 0), pady=3)
+
+    def _recalibrate_split(self):
+        """Ricalibra il rapporto split + parity (background)."""
+        if _CUDA_SPLIT_CALIBRATING:
+            self.status.config(text="calibrazione gia' in corso...")
+            return
+        self.status.config(text="ricalibrating split...")
+        threading.Thread(target=self._recalibrate_split_worker,
+                         daemon=True).start()
+
+    def _recalibrate_split_worker(self):
+        _cuda_calibrate_split()
+        def _ui():
+            self.status.config(text="split: " + _cuda_split_diag())
+            self._refresh_title()
+            self._sync_gpu_menu()
+            self.request_render("split ricalibrato")
+        self.root.after(0, _ui)
 
     def _sync_gpu_menu(self):
         # v5.9.0: allinea il valore senza ricostruire (dopo una selezione).
