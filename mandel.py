@@ -1,11 +1,17 @@
 # ============================================================================
 # Insieme di Mandelbrot - visualizzatore interattivo
-# VERSIONE: 5.8.12
+# VERSIONE: 5.8.13
 # ----------------------------------------------------------------------------
 # REGOLA: ogni modifica incrementa la versione e aggiunge una voce qui sotto
 # (formato: versione - data - descrizione modifiche).
 #
 # STORICO:
+# 5.8.13 - 2026-09-03
+#   - UI: un po' di colore (toni medi, leggibili su chiaro/scuro): status bar
+#     nel colore del motore attivo, barra accento da 3px sopra il canvas,
+#     titoli dei dialog Help colorati, errori in rosso. SOLO Label/Frame:
+#     Button/Checkbutton/Radiobutton restano nativi (lezione 5.4.2: forzarne
+#     i colori su macOS li degrada a flat illeggibili).
 # 5.8.12 - 2026-09-03
 #   - Menu Help: nuova voce "Novità recenti..." che mostra le ultime 10
 #     modifiche di versione (da HISTORY, tupla embedded: i commenti STORICO
@@ -581,13 +587,14 @@ BENCH_REF = (
     ("5070 Ti CUDA (storico)", 250.0),
 )
 
-VERSION = "5.8.12"
+VERSION = "5.8.13"
 
 # Ultime 10 modifiche di versione per Help -> "Novità recenti..."
 # (versione, data, descrizione breve). Fonte embedded: i commenti STORICO
 # non sopravvivono alla build PyInstaller, quindi il dialog legge da qui.
 # REGOLA BUMP: aggiungere la voce nuova in testa e tenere max 10.
 HISTORY = (
+    ("5.8.13", "2026-09-03", "Colore UI: status e accento per motore, errori in rosso."),
     ("5.8.12", "2026-09-03", "Help: voce Novità recenti con le ultime 10 modifiche."),
     ("5.8.11", "2026-09-03", "Menu Help con Istruzioni e Informazioni (autore)."),
     ("5.8.10", "2026-09-04", "Etichetta CPU single/multi-core per precisione."),
@@ -597,7 +604,6 @@ HISTORY = (
     ("5.8.6", "2026-09-02", "Icona .icns via Pillow (sips falliva su macOS 26.x)."),
     ("5.8.5", "2026-09-02", "Ritenzione artefatti KEEP_N=3 in dist/."),
     ("5.8.4", "2026-09-02", "Generazione .icns per la build macOS."),
-    ("5.8.3", "2026-09-02", "Build su disco di sistema, zip/dmg sul NAS."),
 )
 
 # ---------------- Palette (LUT 256x3 condivisa CPU/GPU) ----------------
@@ -1163,6 +1169,16 @@ def _default_backend():
 _ACTIVE = _default_backend()
 # _GPU = c'e' almeno un backend GPU disponibile (usato per il warmup all'avvio).
 _GPU = _ACTIVE != "cpu"
+
+# v5.8.13: accenti colore UI per motore (toni medi, leggibili su tema chiaro
+# e scuro). Usati SOLO su Label/Frame (status bar, barra accento, titoli
+# dialog): Button/Checkbutton/Radiobutton restano nativi (lezione 5.4.2).
+BACKEND_FG = {"cpu": "#1f6feb", "cuda": "#2ea44f",
+              "metal": "#8957e5", "vulkan": "#d97706"}
+ERR_FG = "#e5534b"
+
+def _backend_fg():
+    return BACKEND_FG.get(_ACTIVE, "#1f6feb")
 
 def _gpu_supports_f64():
     # f64 solo su CUDA con kernel f64 compilato; Metal e Vulkan sono f32-only.
@@ -1751,7 +1767,9 @@ class MandelbrotApp:
         self.reset_btn.pack(side="right", padx=2, pady=3)
 
     def _build_canvas_status(self):
-        # --- canvas al centro, status in fondo ---
+        # --- barra accento, canvas al centro, status in fondo ---
+        self.accent = tk.Frame(self.root, height=3, bg=_backend_fg())
+        self.accent.pack(fill="x")
         self.canvas.pack(fill="both", expand=True)
         self.status = tk.Label(self.root, text="render...")
         self.status.pack(fill="x")
@@ -1792,7 +1810,8 @@ class MandelbrotApp:
         body = tk.Frame(win, padx=26, pady=20)
         body.pack(fill="both", expand=True)
         tk.Label(body, text="Insieme di Mandelbrot \u2014 istruzioni",
-                 font=("Segoe UI", 14, "bold")).pack(anchor="w")
+                 font=("Segoe UI", 14, "bold"),
+                 foreground=_backend_fg()).pack(anchor="w")
         text = (
             "Navigazione: rotella per zoomare al cursore (x1.25 / x0.8), "
             "click per zoom x2 al cursore, trascinamento per spostare la vista, "
@@ -1822,7 +1841,8 @@ class MandelbrotApp:
         body = tk.Frame(win, padx=26, pady=20)
         body.pack(fill="both", expand=True)
         tk.Label(body, text="Ultime modifiche",
-                 font=("Segoe UI", 14, "bold")).pack(anchor="w")
+                 font=("Segoe UI", 14, "bold"),
+                 foreground=_backend_fg()).pack(anchor="w")
         rows = tk.Frame(body)
         rows.pack(fill="x", pady=(8, 0))
         for i, (ver, date, desc) in enumerate(HISTORY[:10]):
@@ -1845,7 +1865,8 @@ class MandelbrotApp:
         body = tk.Frame(win, padx=26, pady=20)
         body.pack(fill="both", expand=True)
         tk.Label(body, text="Insieme di Mandelbrot",
-                 font=("Segoe UI", 14, "bold")).pack(anchor="w")
+                 font=("Segoe UI", 14, "bold"),
+                 foreground=_backend_fg()).pack(anchor="w")
         tk.Label(body, text=f"Versione {VERSION}").pack(anchor="w", pady=(6, 0))
         tk.Label(body, text=f"{backend()} ({hw_name()})").pack(anchor="w")
         tk.Label(body, text="Autore: Francesco Ferrara").pack(anchor="w", pady=(10, 0))
@@ -1895,6 +1916,8 @@ class MandelbrotApp:
         for b in self.backend_btns.values():
             b.deselect()
         self.backend_btns[be].select()
+        if getattr(self, "accent", None) is not None:
+            self.accent.config(bg=_backend_fg())
         return True
 
     def _select_precision(self, p):
@@ -2021,7 +2044,8 @@ class MandelbrotApp:
         except ValueError:
             v = 0
         if v < 50 or v > 100000:
-            self.status.config(text="MI invalidi: intero tra 50 e 100000")
+            self.status.config(text="MI invalidi: intero tra 50 e 100000",
+                                   foreground=ERR_FG)
             self.mi_entry.delete(0, "end")
             self.mi_entry.insert(0, str(self.mi))
             return
@@ -2150,7 +2174,8 @@ class MandelbrotApp:
         self.photo = ImageTk.PhotoImage(img)
         self.canvas.delete("all")
         self.canvas.create_image(w // 2, h // 2, image=self.photo)
-        self.status.config(text=f"{msg} | {backend()} \u00b7 {hw_name()} | palette: {_PALETTE} | render: {rt*1000:.0f} ms")
+        self.status.config(text=f"{msg} | {backend()} \u00b7 {hw_name()} | palette: {_PALETTE} | render: {rt*1000:.0f} ms",
+                               foreground=_backend_fg())
         # v5.8.10: il titolo segue il warmup Numba (single->multi a warmup
         # concluso); backend() e' ricalcolato a ogni frame, il titolo no.
         self._refresh_title()
@@ -2158,7 +2183,8 @@ class MandelbrotApp:
     # ---------------- File: PNG, zona (JSON), config ----------------
     def save_png(self):
         if getattr(self, "pil", None) is None:
-            self.status.config(text="niente immagine da salvare")
+            self.status.config(text="niente immagine da salvare",
+                                   foreground=ERR_FG)
             return
         default = "mandelbrot_" + time.strftime("%Y%m%d_%H%M%S") + ".png"
         path = tk.filedialog.asksaveasfilename(
@@ -2170,7 +2196,8 @@ class MandelbrotApp:
             self.pil.save(path, "PNG")
             self.status.config(text="salvata: " + path)
         except Exception as ex:
-            self.status.config(text="errore salvataggio: " + str(ex))
+            self.status.config(text="errore salvataggio: " + str(ex),
+                                   foreground=ERR_FG)
 
     def save_zone(self):
         if self.view_file:
@@ -2206,7 +2233,8 @@ class MandelbrotApp:
             self._update_save_zone_state()
             self.status.config(text="zona salvata: " + path)
         except Exception as ex:
-            self.status.config(text="errore salvataggio zona: " + str(ex))
+            self.status.config(text="errore salvataggio zona: " + str(ex),
+                                   foreground=ERR_FG)
 
     def load_zone_as(self):
         path = tk.filedialog.askopenfilename(
@@ -2226,7 +2254,8 @@ class MandelbrotApp:
             self.mi = int(c.get("mi", self.mi))
             self.mi_auto = bool(c.get("mi_auto", self.mi_auto))
         except Exception as ex:
-            self.status.config(text="errore caricamento zona: " + str(ex))
+            self.status.config(text="errore caricamento zona: " + str(ex),
+                                   foreground=ERR_FG)
             return
         self.mi_auto_var.set(self.mi_auto)
         st = "disabled" if self.mi_auto else "normal"

@@ -227,7 +227,11 @@ Sotto solo scarti + gotcha API.
   (preferenza high-performance).
 - Benchmark: cursore `watch` in `run_benchmark()`, ripristino in
   `_bench_done()` (unico punto di uscita, anche su errore).
-- Tema: widget nativi macOS (nessun colore forzato; seguono il sistema).
+- Tema: Button/Checkbutton/Radiobutton nativi (mai colorati: su macOS
+  degradano a flat illeggibili, lezione 5.4.2); colore solo su Label/Frame:
+  status bar e barra accento (3px sopra il canvas) nel colore del motore
+  (`BACKEND_FG`: CPU `#1f6feb`, CUDA `#2ea44f`, Metal `#8957e5`, Vulkan
+  `#d97706`), titoli dialog Help colorati, errori in rosso `#e5534b`.
   Dialog benchmark: testo di sistema; accenti OK/KO `#2ea44f`/`#e5534b`,
   divisore `#8a8a8a`; grafico: griglia `#a0a0a0`, assi/divisore `#8a8a8a`.
   Solo UI, nessun effetto sul rendering.
