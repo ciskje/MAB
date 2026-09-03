@@ -1,11 +1,18 @@
 # ============================================================================
 # Insieme di Mandelbrot - visualizzatore interattivo
-# VERSIONE: 5.10.2
+# VERSIONE: 5.11.0
 # ----------------------------------------------------------------------------
 # REGOLA: ogni modifica incrementa la versione e aggiunge una voce qui sotto
 # (formato: versione - data - descrizione modifiche).
 #
 # STORICO:
+# 5.11.0 - 2026-09-03
+#   - Ricalcola unico con dropdown esplicito 1x1/2x2/4x4/8x8 (sostituisce i
+#     3 pulsanti separati; 1x1 = vista corrente via pipeline, NxN =
+#     antialiasing in background). Guardia memoria: rifiuto prima di
+#     allocare oltre PHOTO_MAX_MPX_CPU/GPU (16/64 Mpx); MemoryError pulito;
+#     workspace CPU gigante non cacheato; snapshot stantio con w,h (il
+#     resize durante il calcolo scarta invece di stirare).
 # 5.10.2 - 2026-09-03
 #   - Preview draft a 1/8 (invece di 1/4) solo quando e' la CPU a farla;
 #     GPU invariata a 1/4.
@@ -633,6 +640,12 @@ MI_AUTO_MIN, MI_AUTO_MAX = 50, 50000
 MIN_HALF = 1e-12  # clamp minimo per half (evita zoom infinito -> half=0, stato degenere)
 MIN_DIM = 50  # larghezza/altezza canvas minimi per considerare il canvas valido
 
+# v5.11.0: tetto ricalcolo NxN (antialiasing): oltre si rifiuta prima di
+# allocare (niente OOM/crash). CPU ~50/90 B/px (f32/f64, workspace _cpu_ws),
+# GPU ~6-8 B/px (host pinned + device). 8x su 1280x720 = 59 Mpx.
+PHOTO_MAX_MPX_CPU = 16.0
+PHOTO_MAX_MPX_GPU = 64.0
+
 def auto_mi(half):
     """Iterazioni 'auto' per una data half: formula unica condivisa da eff_mi
     e benchmark (vedi costanti MI_AUTO_*)."""
@@ -660,13 +673,14 @@ BENCH_REF = (
     ("5070 Ti CUDA (storico)", 350.0),
 )
 
-VERSION = "5.10.2"
+VERSION = "5.11.0"
 
 # Ultime 10 modifiche di versione per Help -> "Novità recenti..."
 # (versione, data, descrizione breve). Fonte embedded: i commenti STORICO
 # non sopravvivono alla build PyInstaller, quindi il dialog legge da qui.
 # REGOLA BUMP: aggiungere la voce nuova in testa e tenere max 10.
 HISTORY = (
+    ("5.11.0", "2026-09-03", "Ricalcola unico con scala 1x1/2x2/4x4/8x8 e guardia memoria."),
     ("5.10.2", "2026-09-03", "Preview draft a 1/8 solo su CPU (GPU a 1/4)."),
     ("5.10.1", "2026-09-03", "Rinomina Foto NxN in Ricalcola NxN."),
     ("5.10.0", "2026-09-03", "Foto 2x2 + Foto 4x4 (NxN) e pulsante Ricalcola."),
@@ -676,7 +690,6 @@ HISTORY = (
     ("5.9.5", "2026-09-03", "Single-core: ora mostra il perche' (status+Info)."),
     ("5.9.4", "2026-09-03", "Finestra default 1280x720 (16:9)."),
     ("5.9.3", "2026-09-03", "Ref 4070 Super Vulkan corretto a 124."),
-    ("5.9.2", "2026-09-03", "Dropdown GPU anche per Vulkan (adapter selezionabile)."),
 )
 
 # ---------------- Palette (LUT 256x3 condivisa CPU/GPU) ----------------
@@ -2031,14 +2044,15 @@ class MandelbrotApp:
         self.bench_btn.pack(side="right", padx=(16, 8), pady=3)
         self.reset_btn = tk.Button(self.btns, text="Reset", command=self.reset)
         self.reset_btn.pack(side="right", padx=2, pady=3)
-        self.recalc_btn = tk.Button(self.btns, text="Ricalcola", command=self.recalc)
+        self.recalc_btn = tk.Button(self.btns, text="Ricalcola", command=self.recalc_scaled)
         self.recalc_btn.pack(side="right", padx=2, pady=3)
-        self.photo2_btn = tk.Button(self.btns, text="Ricalcola 2x2",
-                                    command=lambda: self.take_photo(2))
-        self.photo2_btn.pack(side="right", padx=2, pady=3)
-        self.photo4_btn = tk.Button(self.btns, text="Ricalcola 4x4",
-                                    command=lambda: self.take_photo(4))
-        self.photo4_btn.pack(side="right", padx=2, pady=3)
+        # v5.11.0: scala esplicita sempre visibile (1x1 = vista corrente,
+        # NxN = antialiasing NxN). Sostituisce i 3 pulsanti separati
+        # (Ricalcola + Ricalcola 2x2/4x4): un solo pulsante + dropdown.
+        self.recalc_var = tk.StringVar(value="2x2")
+        self.recalc_menu = tk.OptionMenu(self.btns, self.recalc_var,
+                                         "1x1", "2x2", "4x4", "8x8")
+        self.recalc_menu.pack(side="right", padx=2, pady=3)
 
     def _build_canvas_status(self):
         # --- barra accento, canvas al centro, status in fondo ---
@@ -2099,11 +2113,12 @@ class MandelbrotApp:
             "Iterazioni: Auto calcola mi dallo zoom; in manuale si imposta il "
             "valore (Invio) o lo si cambia di \u00b11000.\n\n"
             "Palette, file, foto e benchmark: palette dal registro (default fuoco); "
-            "menu File per salvare PNG (Ctrl+S) e zone JSON; Ricalcola 2x2 / "
-            "Ricalcola 4x4 ricalcolano la vista a 2x / 4x per lato e la mostrano con "
-            "antialiasing (media 2x2 / 4x4, da non toccare durante il calcolo; "
-            "4x4 = 16x pixel, molto piu' lento); Ricalcola rifa il rendering "
-            "della vista corrente; Benchmark esegue "
+            "menu File per salvare PNG (Ctrl+S) e zone JSON; Ricalcola con scala "
+            "1x1 (vista corrente) / 2x2 / 4x4 / 8x8: NxN ricalcola la vista a N "
+            "volte per lato e la mostra con antialiasing (media NxN, da non "
+            "toccare durante il calcolo; 4x4 = 16x pixel, 8x8 = 64x pixel, "
+            "molto piu' lenti; oltre il tetto di memoria vengono rifiutati); "
+            "Benchmark esegue "
             "il test standardizzato di 8 s nella vista corrente."
         )
         tk.Label(body, text=text, wraplength=460, justify="left").pack(anchor="w", pady=(8, 0))
@@ -2994,7 +3009,21 @@ class MandelbrotApp:
 
     def recalc(self):
         # v5.10.0: rifa il rendering della vista corrente (preview + full).
+        # v5.11.0: resta come percorso 1x1 di recalc_scaled.
         self.request_render("ricalcolo manuale")
+
+    def recalc_scaled(self):
+        # v5.11.0: dispatcher del pulsante unico "Ricalcola" + dropdown
+        # esplicito 1x1/2x2/4x4/8x8. 1x1 = vista corrente (pipeline
+        # interattiva), NxN = antialiasing in background (take_photo).
+        try:
+            n = int(self.recalc_var.get().split("x")[0])
+        except Exception:
+            n = 1
+        if n <= 1:
+            self.recalc()
+        else:
+            self.take_photo(n)
 
     def take_photo(self, n=2):
         # v5.9.6: foto antialiasing: ricalcola la vista corrente a NxN per
@@ -3010,20 +3039,35 @@ class MandelbrotApp:
         # versione non antialiased.
         # v5.10.0: fattore N parametrico (2 = Ricalcola 2x2, 4 = Ricalcola 4x4):
         # 4x4 = 16x pixel, molto piu' lento e pesante in memoria.
+        # v5.11.0: scala 1x1/2x2/4x4/8x8 dal dropdown unico + guardia memoria
+        # (rifiuto prima di allocare) + w,h nello snapshot stantio (un resize
+        # durante il calcolo scarta invece di mostrare uno stirato NEAREST).
         if getattr(self, "_photo_running", False):
             self.status.config(text="ricalcolo gia' in corso")
             return
+        try:
+            n = int(n)
+        except Exception:
+            n = 2
+        n = max(2, min(8, n))
         w, h = self.canvas_size()
+        mpx = (n * w) * (n * h) / 1e6
+        lim = PHOTO_MAX_MPX_CPU if _ACTIVE == "cpu" else PHOTO_MAX_MPX_GPU
+        if mpx > lim:
+            self.status.config(
+                text=(f"ricalcolo {n}x{n} rifiutato: {mpx:.1f} Mpx > limite "
+                      f"{lim:.0f} Mpx ({_ACTIVE}) — riduci la finestra o usa N minore"),
+                foreground=ERR_FG)
+            return
         view = (self.cx, self.cy, self.half, self.eff_mi(),
-                _PALETTE, _ACTIVE, _PREC)
+                _PALETTE, _ACTIVE, _PREC, w, h)
         if self._full_timer is not None:
             self.root.after_cancel(self._full_timer)
             self._full_timer = None
         self._gen += 1
         _GEN[0] = self._gen
         self._photo_running = True
-        for b in (self.photo2_btn, self.photo4_btn):
-            b.config(state="disabled")
+        self.recalc_btn.config(state="disabled")
         self.root.config(cursor="watch")
         self.status.config(text=f"ricalcolo in corso (antialiasing {n}x{n}, non toccare)...")
         threading.Thread(target=self._photo_worker, args=(view, w, h, n),
@@ -3034,6 +3078,8 @@ class MandelbrotApp:
         # backend (la GPU colora in-kernel, nessun it/mag su host).
         # Nessuna cancellazione durante il calcolo (il risultato stantio
         # e' scartato in _photo_done, non qui).
+        # v5.11.0: MemoryError -> errore pulito (mostrato in _photo_done);
+        # workspace CPU gigante non inquinato in cache (pop dopo l'uso).
         t0 = time.perf_counter()
         try:
             big = compute(view[0], view[1], view[2], n * w, n * h, view[3])
@@ -3043,8 +3089,17 @@ class MandelbrotApp:
             small = (a.reshape(h, n, w, n, 3).mean(axis=(1, 3)) + 0.5).astype(np.uint8)
             img = Image.fromarray(small, "RGB")
             self._photo_result = (img, view, n, time.perf_counter() - t0, None)
+        except MemoryError:
+            self._photo_result = (None, view, n, 0.0,
+                                  "memoria insufficiente: riduci la finestra o usa N minore")
         except Exception as ex:
             self._photo_result = (None, view, n, 0.0, str(ex))
+        finally:
+            try:
+                _CPU_WS.pop((n * w, n * h, "f32"), None)
+                _CPU_WS.pop((n * w, n * h, "f64"), None)
+            except Exception:
+                pass
         self._photo_finished = True
 
     def _photo_done(self, img, view, n, rt, err):
@@ -3052,13 +3107,12 @@ class MandelbrotApp:
         # cursore e pulsanti, come _bench_done.
         self._photo_result = None
         self._photo_running = False
-        for b in (self.photo2_btn, self.photo4_btn):
-            b.config(state="normal")
+        self.recalc_btn.config(state="normal")
         self.root.config(cursor="")
         if err:
             self.status.config(text=f"ricalcolo fallito: {err}")
         elif (self.cx, self.cy, self.half, self.eff_mi(),
-                _PALETTE, _ACTIVE, _PREC) != view:
+                _PALETTE, _ACTIVE, _PREC, *self.canvas_size()) != view:
             self.status.config(text="ricalcolo scartato (vista cambiata)")
         else:
             self._show(img, f"ricalcolo antialiasing {n}x{n}", rt)

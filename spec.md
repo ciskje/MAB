@@ -221,8 +221,8 @@ Sotto solo scarti + gotcha API.
   motore attivo, se > 1) / `Palette:` (check dal registro) / `Precisione:`
   (`f32`/`f64`) / `Iter:` + `Auto`. Seconda riga: label
   `Iterazioni:` / `Iterazioni (auto):`, entry (largh. 7, allineata a destra),
-  `-1000`/`+1000`, `Ricalcola 2x2`, `Ricalcola 4x4`, `Ricalcola`, `Benchmark`,
-  `Reset`. Poi canvas, poi status bar.
+  `-1000`/`+1000`, dropdown scala `1x1`/`2x2`/`4x4`/`8x8` + `Ricalcola`,
+  `Benchmark`, `Reset`. Poi canvas, poi status bar.
   Font `TkDefaultFont/TkTextFont/TkMenuFont` 13 pt.
    Menu File: `Salva immagine... (Ctrl+S)`, `Carica zona...`, `Salva zona`,
    `Salva zona con nome...`, separatore, `Esci`.
@@ -253,18 +253,23 @@ Sotto solo scarti + gotcha API.
    (`VulkanBackend.name`, default ex high-performance).
 - Benchmark: cursore `watch` in `run_benchmark()`, ripristino in
   `_bench_done()` (unico punto di uscita, anche su errore).
-- Ricalcola NxN (`Ricalcola 2x2`/`Ricalcola 4x4`): ricalcola la vista a NxN
-  per lato (N=2/N=4; 4x4 = 16x pixel, molto piu' lento e pesante in memoria)
+- Ricalcola con scala (dropdown esplicito `1x1`/`2x2`/`4x4`/`8x8` +
+  pulsante unico `Ricalcola`, dispatcher `recalc_scaled()`): `1x1` rifa il
+  rendering della vista corrente (`request_render`); NxN ricalcola la vista
+  a NxN per lato (2x2 = 4x pixel, 4x4 = 16x, 8x8 = 64x, molto piu' lenti)
   in thread dedicato e mostra la media NxN su RGB (`take_photo(n)`/`_photo_worker`/`_photo_done`;
   box-filter sull'output, unico code-path per tutti i backend dato che la
   GPU colora in-kernel); cursore `watch` durante il calcolo, ripristino in
   `_photo_done()` (unico punto di uscita, anche su errore); all'avvio
   invalida i render interattivi in volo/pendenti (bump `_GEN` + cancella
-  il full-timer ritardato) e il risultato e' scartato se vista, palette,
-  motore o precisione cambiano nel frattempo (snapshot esteso, non
-  generazione); `self.pil` aggiornata così `Ctrl+S` salva la versione
-  antialiased. Un ricalcolo alla volta (secondo click: `ricalcolo gia' in corso`).
-- Ricalcola: rifa il rendering della vista corrente (`request_render`).
+  il full-timer ritardato) e il risultato e' scartato se vista, dimensione
+  canvas, palette, motore o precisione cambiano nel frattempo (snapshot
+  esteso con `w,h`, non generazione); `self.pil` aggiornata così `Ctrl+S`
+  salva la versione antialiased. Un ricalcolo alla volta (secondo click:
+  `ricalcolo gia' in corso`). Guardia memoria: rifiuto prima di allocare
+  oltre `PHOTO_MAX_MPX_CPU/GPU` (16/64 Mpx totali; 8x su 1280x720 = 59 Mpx);
+  `MemoryError` -> errore pulito; workspace CPU gigante rimosso dalla cache
+  `_CPU_WS` dopo l'uso (non inquina gli entry interattivi).
 - Tema: Button/Checkbutton/Radiobutton nativi (mai colorati: su macOS
   degradano a flat illeggibili, lezione 5.4.2); colore solo su Label/Frame:
   status bar e barra accento (3px sopra il canvas) nel colore del motore
