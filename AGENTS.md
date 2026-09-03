@@ -45,7 +45,9 @@ può stare su share lenta); Vulkan bundled out-of-the-box, CUDA richiede
 driver + runtime utente (cuda-pathfinder); ritenzione `KEEP_N = 3` versioni
 per piattaforma in `dist/` (rimozione automatica delle più vecchie).
 Ordine: modifica → versione+STORICO+spec (§2) → `python build_app.py` →
-verifica → `git commit`. Dettaglio tecnico: `spec.md` §11.
+verifica → `git commit` automatico (a ogni salto di versione l'agente committa
+da solo, senza chiedere; messaggio `vX.Y.Z: descrizione`).
+Dettaglio tecnico: `spec.md` §11.
 
 ## 4. Note operative
 - Gotchas (FMA, Numba, CuPy, Metal, `__constant__`, pinned memory): casa unica
