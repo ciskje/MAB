@@ -91,12 +91,12 @@ Registro `PALETTES` (fonte unica): ordine = indice kernel (0 fuoco, 1 ghiaccio,
 | metal | sì | mai (f32-only) |
 | vulkan | sì | mai (f32-only) |
 
-- GPU multipla: dropdown `GPU:` con contenuto per motore attivo (nascosto se
-  il motore ha <= 1 GPU). CUDA: device da `_CUDA_DEVICES` (`gpu1`/`gpu2`/...)
-  + voce `Entrambe (split NN/MM)` (v6.2): spartisce ogni render in bande
-  orizzontali sulle prime 2 CUDA con rapporto auto-calibrato
-  (`_cuda_calibrate_split`: probe 480x270 sulla vista bench dopo warmup,
-  quota = velocità relativa, clamp 10/90, persistita in `cuda_split_ratio`);
+- GPU multipla: dropdown `GPU:` nella 2a riga toolbar, contenuto per motore
+  attivo (nascosto se il motore ha <= 1 GPU). CUDA: device da `_CUDA_DEVICES`
+  (`gpu1`/`gpu2`/...) + voce `Entrambe (split NN/MM)` (v6.2): spartisce ogni
+  render in bande orizzontali sulle prime 2 CUDA con rapporto fisso
+  (v6.2.5: dropdown 1/3 2/3, 50/50, 2/3 1/3; calibrazione automatica solo su
+  richiesta col pulsante ricampiona, non all'avvio);
    kernel con offset `row0` (bit-identico al single), buffer device separati
    per banda (`_CUDA_SPLIT_BUFS`), cucitura su host pinned, fallback single
    in errore; sotto 32 px di altezza resta single (soglia tecnica). Render
@@ -152,11 +152,12 @@ Sotto solo scarti + gotcha API.
   per il calcolo della coordinata, `out_row=ty` per l'indice nel buffer locale
   alla banda → v6.2.3: fix OOB, prima scriveva a indici assoluti in buffer
   locali). Lancio unico `_cuda_launch_band` per single e split. Handle kernel
-  per-device (`_kern_for(dev, use64)`, v6.2.3: no RawKernel condiviso tra
-  thread). Parity automatica (v6.2.1): dopo la calibrazione, split e single
-  sulla vista bench devono essere bit-identici (`_cuda_split_parity`, v6.2.2:
-  pattern-match + ordine invertito); in caso di diff lo split si auto-disattiva
-  (rapporto + esito in Help > Informazioni, `_cuda_split_diag`).
+   per-device (`_kern_for(dev, use64)`, v6.2.3: no RawKernel condiviso tra
+   thread). Parity (v6.2.1): split e single sulla vista bench devono essere
+   bit-identici (`_cuda_split_parity`, v6.2.2: pattern-match + ordine invertito);
+   in caso di diff lo split si auto-disattiva (rapporto + esito in Help >
+   Informazioni, `_cuda_split_diag`). v6.2.5: calibrazione + parity solo su
+   richiesta (pulsante ricampiona); rapporto fisso via dropdown (1/3, 50/50, 2/3).
 - Scalari = array numpy size-1; indice palette preallocato (`_PAL_IDX`);
   `np.asarray` su array CuPy vietato → `.get()`.
 - D2H pinned: `PinnedMemory(size)` + `runtime.memcpy(..., memcpyDeviceToHost)`
