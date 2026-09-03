@@ -146,20 +146,18 @@ Sotto solo scarti + gotcha API.
 
 ### 6.2 CUDA (CuPy `RawKernel`)
 - 1 px/thread, `__launch_bounds__(256)`, block 16x16, grid
-  `(ceil(w/16), ceil(h/16))`, `options=("--use_fast_math",)`; 2 varianti
+  `(ceil(w/16), ceil(bh/16))`, `options=("--use_fast_math",)`; 2 varianti
   f32/f64 dalla stessa sorgente; NVRTC lazy (no `-O3`). Guardia bounds su
-  entrambi gli assi (`col >= w || row >= h`, come Metal/Vulkan): senza il
-  check su `row` i thread di bordo in y scrivevano fuori `out`
-  (`cudaErrorIllegalAddress` sul ricalcolo NxN grande, silente sui frame
-  piccoli per la slack di `_BUF`). Parametro `row0` (v6.2): prima riga della
-  banda per lo split multi-GPU (griglia dimensionata sulla banda, indici su
-  w/h assoluti → partizionare non cambia un pixel); lancio unico
-  `_cuda_launch_band` per single e split. Parity automatica (v6.2.1):
-  dopo la calibrazione, split e single sulla vista bench devono essere
-  bit-identici (`_cuda_split_parity`); in caso di diff lo split si
-  auto-disattiva e `Entrambe` viene rifiutata con la % (rapporto + esito
-  in Help > Informazioni, `_cuda_split_diag`; v6.2.2: pattern-match banda 2
-  vs righe alte del single per distinguere row0-ignorato da banda-mai-scritta).
+  entrambi gli assi (`col >= w || out_row >= bh`). Parametro `row0` (v6.2):
+  prima riga della banda per lo split multi-GPU (griglia sulla banda, `row0+ty`
+  per il calcolo della coordinata, `out_row=ty` per l'indice nel buffer locale
+  alla banda → v6.2.3: fix OOB, prima scriveva a indici assoluti in buffer
+  locali). Lancio unico `_cuda_launch_band` per single e split. Handle kernel
+  per-device (`_kern_for(dev, use64)`, v6.2.3: no RawKernel condiviso tra
+  thread). Parity automatica (v6.2.1): dopo la calibrazione, split e single
+  sulla vista bench devono essere bit-identici (`_cuda_split_parity`, v6.2.2:
+  pattern-match + ordine invertito); in caso di diff lo split si auto-disattiva
+  (rapporto + esito in Help > Informazioni, `_cuda_split_diag`).
 - Scalari = array numpy size-1; indice palette preallocato (`_PAL_IDX`);
   `np.asarray` su array CuPy vietato → `.get()`.
 - D2H pinned: `PinnedMemory(size)` + `runtime.memcpy(..., memcpyDeviceToHost)`

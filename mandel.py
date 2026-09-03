@@ -1,11 +1,17 @@
 # ============================================================================
 # Insieme di Mandelbrot - visualizzatore interattivo
-# VERSIONE: 6.2.2
+# VERSIONE: 6.2.3
 # ----------------------------------------------------------------------------
 # REGOLA: ogni modifica incrementa la versione e aggiunge una voce qui sotto
 # (formato: versione - data - descrizione modifiche).
 #
 # STORICO:
+# 6.2.3 - 2026-09-03
+#   - Fix split CUDA (seam): kernel scriveva a indici assoluti
+#     (row0+ty) in buffer locali alla banda -> OOB. Ora: out_row=ty
+#     (locale) per il buffer, row0+ty solo per il calcolo della
+#     coordinata. Guardia su bh. Handle kernel per-device (no stato
+#     condiviso tra thread). Parity testa anche ordine invertito.
 # 6.2.2 - 2026-09-03
 #   - Split CUDA: parity con pattern-match (banda 2 vs righe alte del
 #     single per provare row0-ignorato; quote per-banda; h0 nel report).
@@ -820,13 +826,14 @@ BENCH_REF = (
     ("5070 Ti CUDA (storico)", 350.0),
 )
 
-VERSION = "6.2.2"
+VERSION = "6.2.3"
 
 # Ultime 10 modifiche di versione per Help -> "Novità recenti..."
 # (versione, data, descrizione breve). Fonte embedded: i commenti STORICO
 # non sopravvivono alla build PyInstaller, quindi il dialog legge da qui.
 # REGOLA BUMP: aggiungere la voce nuova in testa e tenere max 10.
 HISTORY = (
+    ("6.2.3", "2026-09-03", "Fix split CUDA: output locale alla banda (row0 solo per il calcolo)."),
     ("6.2.2", "2026-09-03", "Parity split con pattern-match sulla banda 2 (indagine seam)."),
     ("6.2.1", "2026-09-03", "Split CUDA: parity automatica split-vs-single con fail-safe."),
     ("6.2", "2026-09-03", "Split CUDA su 2 GPU con rapporto auto-calibrato (gpu1/gpu2/entrambe)."),
@@ -836,7 +843,6 @@ HISTORY = (
     ("6.0", "2026-09-03", "Ricalcola prima del dropdown, scala persistente con ricalcolo immediato."),
     ("5.11.1", "2026-09-03", "Bugfix CUDA: guardia riga nel kernel (no piu' illegal access su NxN grande)."),
     ("5.11.0", "2026-09-03", "Ricalcola unico con scala 1x1/2x2/4x4/8x8 e guardia memoria."),
-    ("5.10.2", "2026-09-03", "Preview draft a 1/8 solo su CPU (GPU a 1/4)."),
 )
 
 # ---------------- Palette (LUT 256x3 condivisa CPU/GPU) ----------------
@@ -912,17 +918,12 @@ __device__ __forceinline__ void pal_lut(@@T@@ t, const unsigned char* lut, unsig
 }
 
 __device__ __forceinline__ void process_pixel(
-    int col, int row, int w, int h,
+    int col, int row, int out_row, int w, int bh, int h,
     @@T@@ cx, @@T@@ cy, @@T@@ half, int mi,
     const unsigned char* lut,
     unsigned char* __restrict__ out)
 {
-    // v5.11.1: guardia anche su row (prima solo col): i blocchi di bordo
-    // hanno ty >= h e scrivevano fuori bounds (out + (row*w+col)*3).
-    // Su frame piccoli l'overrun finiva nella slack di _BUF e passava
-    // inosservato; sul ricalcolo NxN grande (_BUF esatto) diventava
-    // cudaErrorIllegalAddress. Metal/Vulkan avevano gia' entrambe le guardie.
-    if (col >= w || row >= h) return;
+    if (col >= w || out_row >= bh) return;
     @@T@@ x0 = cx + half * ((@@T@@)(2 * col - w) / (@@T@@)w);
     @@T@@ y0 = cy + half * ((@@T@@)h / (@@T@@)w) * ((@@T@@)(2 * row - h) / (@@T@@)h);
     // Interior analitico: bulbo periodica-2 + cardioide principale
@@ -933,7 +934,7 @@ __device__ __forceinline__ void process_pixel(
     // Prefiltro bounding-box dell'insieme: evita il costo della sqrt sui
     // pixel chiaramente esterni (fuggono in 1-2 iterazioni).
     if (x0 >= -2.0@@S@@ && x0 <= 0.4@@S@@ && y0 >= -1.3@@S@@ && y0 <= 1.3@@S@@) {
-        unsigned char* p = out + (size_t)(row * w + col) * 3;
+        unsigned char* p = out + (size_t)(out_row * w + col) * 3;
         @@T@@ d2 = (x0 + 1.0@@S@@) * (x0 + 1.0@@S@@) + y0 * y0;
         if (d2 <= 0.0625@@S@@) { p[0] = 0; p[1] = 0; p[2] = 0; return; }
         @@T@@ A = 1.0@@S@@ - 4.0@@S@@ * x0;
@@ -956,7 +957,7 @@ __device__ __forceinline__ void process_pixel(
         mag2 = zr * zr + wi * wi;
         if (mag2 > 4.0@@S@@) { esc = true; it = i; }
     }
-    unsigned char* p = out + (size_t)(row * w + col) * 3;
+    unsigned char* p = out + (size_t)(out_row * w + col) * 3;
     if (!esc) { p[0] = 0; p[1] = 0; p[2] = 0; return; }
     @@T@@ nu = (@@T@@)it + 1.0@@S@@ - @@LOG2@@(0.5@@S@@ * @@LOG@@(mag2));
     @@T@@ t = @@POW@@(@@FMIN@@(1.0@@S@@, @@FMAX@@(0.0@@S@@, nu / (@@T@@)mi)), 0.35@@S@@);
@@ -969,7 +970,7 @@ extern "C" __global__ void __launch_bounds__(256) @@KNAME@@(
     unsigned char* __restrict__ out,
     int pal,
     @@T@@ cx, @@T@@ cy, @@T@@ half,
-    int w, int h, int mi,
+    int w, int bh, int h, int mi,
     int row0)
 {
     @@LUTSELECT@@
@@ -981,10 +982,11 @@ extern "C" __global__ void __launch_bounds__(256) @@KNAME@@(
     // varianti bit-identiche tra loro (ogni pixel e' calcolato in modo
     // indipendente, la config non cambia il risultato).
     // v6.2: row0 = prima riga della banda (split multi-GPU): la griglia e'
-    // dimensionata sulla banda (bh), la riga assoluta e' row0+ty e l'indice
-    // in out usa w/h assoluti -> partizionare non cambia un pixel.
+    // dimensionata sulla banda (bh), la riga assoluta e' row0+ty per il
+    // calcolo, l'output usa out_row=ty (buffer locale alla banda).
+    // v6.2.3: bh per la guardia (buffer locale, non h assoluto).
     int col0 = tx;
-    process_pixel(col0, row0 + ty, w, h, cx, cy, half, mi, lut, out);
+    process_pixel(col0, row0 + ty, ty, w, bh, h, cx, cy, half, mi, lut, out);
 }
 '''
 
@@ -1090,6 +1092,7 @@ _CUDA_SPLIT_RATIO = 0.5
 _CUDA_SPLIT_MIN_H = 32  # sotto: single (soglia tecnica, non policy)
 _CUDA_SPLIT_BUFS = {}  # {dev_id: array} buffer device per banda (mai condivisi)
 _CUDA_SPLIT_CALIBRATING = False
+_CUDA_SPLIT_SWAP = False  # v6.2.3: bande invertite (solo parity diagnostica)
 
 def _cuda_split_devs():
     """(id0, id1) della coppia split, o None se < 2 device."""
@@ -1110,6 +1113,28 @@ def set_cuda_split(on):
     _HW_CACHE.pop("cuda", None)
     return True
 
+# v6.2.3: handle kernel SEPARATI per device (niente RawKernel condiviso tra
+# i thread delle bande: la banda 2 riceveva row0=0, cioe' gli scalari del
+# lancio della banda 1). Compilati lazy una volta per (dev, prec) sotto lock;
+# i lanci restano paralleli.
+_KERN_DEV = {}
+_KERN_DEV_LOCK = threading.Lock()
+
+def _kern_for(dev, use64):
+    """Handle kernel DEDICATO per (device, prec), compilato fresh una volta
+    sotto lock (mai condiviso tra device/thread)."""
+    key = (dev, use64)
+    k = _KERN_DEV.get(key)
+    if k is not None:
+        return k
+    with _KERN_DEV_LOCK:
+        k = _KERN_DEV.get(key)
+        if k is None:
+            src, name = _build_kernel("f64" if use64 else "f32")
+            k = cp.RawKernel(src, name, options=("--use_fast_math",))
+            _KERN_DEV[key] = k
+    return k
+
 def _cuda_launch_band(dev, out, row0, bh, w, h, mi, pal, use64, fdt,
                       cx, cy, half):
     """Un launch sulla banda [row0, row0+bh) del device dato (single e split
@@ -1117,13 +1142,14 @@ def _cuda_launch_band(dev, out, row0, bh, w, h, mi, pal, use64, fdt,
     with cp.cuda.Device(dev):
         bx, by = 16, 16
         grid = ((w + bx - 1) // bx, (bh + by - 1) // by)
-        kernel = _KERNEL_F64 if use64 else _KERNEL_F32
+        kernel = _kern_for(dev, use64)
         args = (out,
                 _PAL_IDX[pal],
                 np.asarray(cx, dtype=fdt),
                 np.asarray(cy, dtype=fdt),
                 np.asarray(half, dtype=fdt),
                 np.asarray(w, dtype=np.int32),
+                np.asarray(bh, dtype=np.int32),
                 np.asarray(h, dtype=np.int32),
                 np.asarray(mi, dtype=np.int32),
                 np.asarray(row0, dtype=np.int32))
@@ -1153,6 +1179,15 @@ def _cuda_calibrate_split():
         b = BENCH
         mi = auto_mi(b["half"])
         w, h = 480, 270
+        # v6.2.3: pre-compila gli handle dedicati (le probe devono misurare,
+        # non compilare).
+        for _dev in devs:
+            try:
+                _kern_for(_dev, False)
+                if _KERNEL_F64 is not None:
+                    _kern_for(_dev, True)
+            except Exception:
+                pass
         ts = []
         for dev in devs:
             for _ in range(3):
@@ -1178,6 +1213,9 @@ def _compute_gpu_cuda_split_arr(cx, cy, half, w, h, mi, prec=None):
     h0 = (int(round(h * r)) // 16) * 16
     h0 = min(max(h0, 16), h - 16)
     bands = [(devs[0], 0, h0), (devs[1], h0, h - h0)]
+    if _CUDA_SPLIT_SWAP:
+        # v6.2.3: solo per la parity invertita (diagnostica).
+        bands = [(devs[1], 0, h0), (devs[0], h0, h - h0)]
     pal = list(PALETTES).index(_PALETTE)
     p = prec if prec in ("f32", "f64") else _PREC
     use64 = (p == "f64") and (_KERNEL_F64 is not None)
@@ -1262,11 +1300,10 @@ def _pixdiff(x, y):
 
 def _cuda_split_parity():
     """Split e single sulla stessa vista devono essere bit-identici (ogni
-    pixel e' indipendente). Probe 480x270 sulla vista bench + pattern-match
-    sulla banda 2 (distingue row0-ignorato da banda-mai-scritta). In caso di
-    differenza lo split si auto-disattiva (fail-safe). Background."""
+    pixel e' indipendente). Test normale + invertito. In caso di diff lo
+    split si auto-disattiva (fail-safe). Background."""
     global _CUDA_SPLIT_PARITY_OK, _CUDA_SPLIT_PARITY_DIFF
-    global _CUDA_SPLIT_PARITY_INFO, _CUDA_SPLIT_ON
+    global _CUDA_SPLIT_PARITY_INFO, _CUDA_SPLIT_ON, _CUDA_SPLIT_SWAP
     devs = _cuda_split_devs()
     if devs is None:
         return
@@ -1277,31 +1314,40 @@ def _cuda_split_parity():
         r = min(0.9, max(0.1, _CUDA_SPLIT_RATIO))
         h0 = (int(round(h * r)) // 16) * 16
         h0 = min(max(h0, 16), h - 16)
-        bh1 = h - h0
-        a = _compute_gpu_cuda_split_arr(b["cx"], b["cy"], b["half"],
-                                        w, h, mi).copy()
         c = _cuda_render_array(devs[0], b["cx"], b["cy"], b["half"],
                                w, h, mi)
+        # --- test 1: ordine normale ---
+        _CUDA_SPLIT_SWAP = False
+        a = _compute_gpu_cuda_split_arr(b["cx"], b["cy"], b["half"],
+                                        w, h, mi).copy()
         if a.shape != c.shape:
             raise ValueError("shape %s vs %s" % (a.shape, c.shape))
         diff = _pixdiff(a, c)
+        if diff == 0.0:
+            _CUDA_SPLIT_PARITY_OK = True
+            _CUDA_SPLIT_PARITY_DIFF = 0.0
+            _CUDA_SPLIT_PARITY_INFO = ""
+            return
         d0 = _pixdiff(a[:h0], c[:h0])
         d1 = _pixdiff(a[h0:], c[h0:])
-        # La banda 2 coincide con le righe ALTE del single? -> row0 ignorato.
-        d1_top = _pixdiff(a[h0:], c[:bh1])
+        d1_top = _pixdiff(a[h0:], c[:h - h0])
+        # --- test 2: ordine invertito ---
+        _CUDA_SPLIT_SWAP = True
+        a2 = _compute_gpu_cuda_split_arr(b["cx"], b["cy"], b["half"],
+                                         w, h, mi).copy()
+        _CUDA_SPLIT_SWAP = False
+        diff2 = _pixdiff(a2, c)
         if d1_top == 0.0 and d1 > 0.0:
-            pat = "; banda2 = copia righe alte (row0 ignorato?)"
-        elif d1 > 0.5 and d0 == 0.0:
-            pat = "; banda2 mai scritta? (h0=%d)" % h0
+            pat = ("norm: banda2=copia alte (row0 ignorato); "
+                   "invert: diff %.1f%%" % (diff2 * 100.0))
         else:
-            pat = "; d0=%.1f%% d1=%.1f%% d1vstop=%.1f%% (h0=%d)" % (
-                d0 * 100.0, d1 * 100.0, d1_top * 100.0, h0)
+            pat = ("norm: d0=%.1f%% d1=%.1f%%; invert: diff %.1f%%"
+                   % (d0 * 100.0, d1 * 100.0, diff2 * 100.0))
         _CUDA_SPLIT_PARITY_DIFF = diff
         _CUDA_SPLIT_PARITY_INFO = pat
-        _CUDA_SPLIT_PARITY_OK = (diff == 0.0)
-        if not _CUDA_SPLIT_PARITY_OK:
-            _CUDA_SPLIT_ON = False
-            _HW_CACHE.pop("cuda", None)
+        _CUDA_SPLIT_PARITY_OK = False
+        _CUDA_SPLIT_ON = False
+        _HW_CACHE.pop("cuda", None)
     except Exception:
         pass
 
