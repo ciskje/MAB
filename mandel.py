@@ -1,11 +1,22 @@
 # ============================================================================
 # Insieme di Mandelbrot - visualizzatore interattivo
-# VERSIONE: 5.8.10
+# VERSIONE: 5.8.12
 # ----------------------------------------------------------------------------
 # REGOLA: ogni modifica incrementa la versione e aggiunge una voce qui sotto
 # (formato: versione - data - descrizione modifiche).
 #
 # STORICO:
+# 5.8.12 - 2026-09-03
+#   - Menu Help: nuova voce "Novità recenti..." che mostra le ultime 10
+#     modifiche di versione (da HISTORY, tupla embedded: i commenti STORICO
+#     non sopravvivono alla build PyInstaller). Ad ogni bump, HISTORY va
+#     aggiornata insieme allo STORICO (voce nuova in testa, max 10).
+# 5.8.11 - 2026-09-03
+#   - Menu Help con due voci separate: "Istruzioni..." (guida rapida a
+#     navigazione, motore/precisione, iterazioni, palette, zone, benchmark)
+#     e "Informazioni..." (versione, backend/hardware attivi, autore
+#     Francesco Ferrara <occhiobello@gmail.com>). Dialog Toplevel modali
+#     centrati sullo stile di quelli del benchmark (via _modal).
 # 5.8.10 - 2026-09-04
 #   - UI: backend() CPU mostra sempre single/multi-core per la precisione
 #     corrente ("CPU f32 multi-core" col kernel Numba parallelo,
@@ -570,7 +581,24 @@ BENCH_REF = (
     ("5070 Ti CUDA (storico)", 250.0),
 )
 
-VERSION = "5.8.10"
+VERSION = "5.8.12"
+
+# Ultime 10 modifiche di versione per Help -> "Novità recenti..."
+# (versione, data, descrizione breve). Fonte embedded: i commenti STORICO
+# non sopravvivono alla build PyInstaller, quindi il dialog legge da qui.
+# REGOLA BUMP: aggiungere la voce nuova in testa e tenere max 10.
+HISTORY = (
+    ("5.8.12", "2026-09-03", "Help: voce Novità recenti con le ultime 10 modifiche."),
+    ("5.8.11", "2026-09-03", "Menu Help con Istruzioni e Informazioni (autore)."),
+    ("5.8.10", "2026-09-04", "Etichetta CPU single/multi-core per precisione."),
+    ("5.8.9", "2026-09-03", "Ritenzione dist/: ultime 3 versioni per piattaforma."),
+    ("5.8.8", "2026-09-02", "Fix nome GPU Metal (selector callable invocato)."),
+    ("5.8.7", "2026-09-02", "Ritenzione dist/: un artefatto per piattaforma garantito."),
+    ("5.8.6", "2026-09-02", "Icona .icns via Pillow (sips falliva su macOS 26.x)."),
+    ("5.8.5", "2026-09-02", "Ritenzione artefatti KEEP_N=3 in dist/."),
+    ("5.8.4", "2026-09-02", "Generazione .icns per la build macOS."),
+    ("5.8.3", "2026-09-02", "Build su disco di sistema, zip/dmg sul NAS."),
+)
 
 # ---------------- Palette (LUT 256x3 condivisa CPU/GPU) ----------------
 _FIRE = (
@@ -1739,6 +1767,12 @@ class MandelbrotApp:
         self.mfile.add_separator()
         self.mfile.add_command(label="Esci", command=self.on_exit)
         self.menu.add_cascade(label="File", menu=self.mfile)
+        self.mhelp = tk.Menu(self.menu, tearoff=0)
+        self.mhelp.add_command(label="Istruzioni...", command=self.show_help)
+        self.mhelp.add_command(label="Novità recenti...", command=self.show_recent)
+        self.mhelp.add_separator()
+        self.mhelp.add_command(label="Informazioni...", command=self.show_about)
+        self.menu.add_cascade(label="Help", menu=self.mhelp)
         self.root.config(menu=self.menu)
         self.root.protocol("WM_DELETE_WINDOW", self.on_exit)
         self._update_save_zone_state()
@@ -1749,6 +1783,79 @@ class MandelbrotApp:
         # o con "Carica zona...".
         state = "normal" if self.view_file else "disabled"
         self.mfile.entryconfig(self.save_zone_entry, state=state)
+
+    def show_help(self):
+        # Guida rapida (menu Help -> Istruzioni...).
+        win = tk.Toplevel(self.root)
+        win.title("Istruzioni")
+        win.resizable(False, False)
+        body = tk.Frame(win, padx=26, pady=20)
+        body.pack(fill="both", expand=True)
+        tk.Label(body, text="Insieme di Mandelbrot \u2014 istruzioni",
+                 font=("Segoe UI", 14, "bold")).pack(anchor="w")
+        text = (
+            "Navigazione: rotella per zoomare al cursore (x1.25 / x0.8), "
+            "click per zoom x2 al cursore, trascinamento per spostare la vista, "
+            "tasti + / - per zoom x2 / x0.5 al centro, r per il reset.\n\n"
+            "Motore e precisione: toolbar Motore (CPU / CUDA / Metal / Vulkan) "
+            "e Precisione (f32 / f64); i backend non disponibili restano grigi. "
+            "CUDA richiede driver NVIDIA + runtime; Vulkan funziona out-of-the-box.\n\n"
+            "Iterazioni: Auto calcola mi dallo zoom; in manuale si imposta il "
+            "valore (Invio) o lo si cambia di \u00b11000.\n\n"
+            "Palette, file e benchmark: palette dal registro (default fuoco); "
+            "menu File per salvare PNG (Ctrl+S) e zone JSON; Benchmark esegue "
+            "il test standardizzato di 8 s nella vista corrente."
+        )
+        tk.Label(body, text=text, wraplength=460, justify="left").pack(anchor="w", pady=(8, 0))
+        def chiudi(_e=None):
+            win._annullato = False
+            win.destroy()
+        tk.Button(win, text="Chiudi", command=chiudi).pack(pady=(18, 20))
+        win.bind("<Return>", chiudi)
+        self._modal(win)
+
+    def show_recent(self):
+        # Ultime 10 modifiche (menu Help -> Novità recenti...), da HISTORY.
+        win = tk.Toplevel(self.root)
+        win.title("Novità recenti")
+        win.resizable(False, False)
+        body = tk.Frame(win, padx=26, pady=20)
+        body.pack(fill="both", expand=True)
+        tk.Label(body, text="Ultime modifiche",
+                 font=("Segoe UI", 14, "bold")).pack(anchor="w")
+        rows = tk.Frame(body)
+        rows.pack(fill="x", pady=(8, 0))
+        for i, (ver, date, desc) in enumerate(HISTORY[:10]):
+            tk.Label(rows, text=f"v{ver} ({date})", width=18, anchor="w",
+                     font=("Consolas", 11, "bold")).grid(row=i, column=0, sticky="nw", pady=2)
+            tk.Label(rows, text=desc, wraplength=340, justify="left",
+                     anchor="w").grid(row=i, column=1, sticky="nw", pady=2)
+        def chiudi(_e=None):
+            win._annullato = False
+            win.destroy()
+        tk.Button(win, text="Chiudi", command=chiudi).pack(pady=(18, 20))
+        win.bind("<Return>", chiudi)
+        self._modal(win)
+
+    def show_about(self):
+        # Scheda autore/versione (menu Help -> Informazioni...).
+        win = tk.Toplevel(self.root)
+        win.title("Informazioni")
+        win.resizable(False, False)
+        body = tk.Frame(win, padx=26, pady=20)
+        body.pack(fill="both", expand=True)
+        tk.Label(body, text="Insieme di Mandelbrot",
+                 font=("Segoe UI", 14, "bold")).pack(anchor="w")
+        tk.Label(body, text=f"Versione {VERSION}").pack(anchor="w", pady=(6, 0))
+        tk.Label(body, text=f"{backend()} ({hw_name()})").pack(anchor="w")
+        tk.Label(body, text="Autore: Francesco Ferrara").pack(anchor="w", pady=(10, 0))
+        tk.Label(body, text="Email: occhiobello@gmail.com").pack(anchor="w")
+        def chiudi(_e=None):
+            win._annullato = False
+            win.destroy()
+        tk.Button(win, text="Chiudi", command=chiudi).pack(pady=(18, 20))
+        win.bind("<Return>", chiudi)
+        self._modal(win)
 
     def _bind_events(self):
         self.press_pos = None

@@ -202,8 +202,15 @@ Sotto solo scarti + gotcha API.
   `Iterazioni:` / `Iterazioni (auto):`, entry (largh. 7, allineata a destra),
   `-1000`/`+1000`, `Benchmark`, `Reset`. Poi canvas, poi status bar.
   Font `TkDefaultFont/TkTextFont/TkMenuFont` 13 pt.
-  Menu File: `Salva immagine... (Ctrl+S)`, `Carica zona...`, `Salva zona`,
-  `Salva zona con nome...`, separatore, `Esci`.
+   Menu File: `Salva immagine... (Ctrl+S)`, `Carica zona...`, `Salva zona`,
+   `Salva zona con nome...`, separatore, `Esci`.
+   Menu Help: `Istruzioni...` (guida rapida: navigazione, motore/precisione,
+   iterazioni, palette, file, benchmark), `Novità recenti...` (ultime 10
+   modifiche da tupla embedded `HISTORY`, righe versione/data/descrizione),
+   separatore, `Informazioni...` (versione, backend/hardware attivi, autore
+   Francesco Ferrara `<occhiobello@gmail.com>`). Dialog `Toplevel` modali
+   centrati via `_modal`. `HISTORY` è embedded (non STORICO commentato, che
+   PyInstaller scarta): va aggiornata a ogni bump (voce in testa, max 10).
 - Titolo: `Insieme di Mandelbrot v<VER> - <backend()> (<hw>)`
   + ` - <basename zona>` se presente; ricalcolato a ogni frame in `_show`
   così segue la transizione warmup `single-core` → `multi-core`.

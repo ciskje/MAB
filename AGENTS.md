@@ -31,8 +31,9 @@ Ogni modifica bumper DEVE:
 
 ## 3. Build dell'app (multipiattaforma)
 Principio: l'agente non builda mai in automatico; builda solo con
-`python build_app.py` su richiesta esplicita, e comunque prima di ogni commit
-che tocca i sorgenti — così l'artefatto su filesystem riflette il sorgente.
+`python build_app.py` su richiesta esplicita dell'utente. Mai buildare di
+iniziativa, nemmeno prima di un commit: se il sorgente avanza senza build,
+l'artefatto su filesystem resta semplicemente indietro (è normale).
 L'artefatto non va mai committato (`dist/` è gitignorato).
 
 | piattaforma | app (disco di sistema, temp) | distributivo (progetto/NAS, `dist/`) |
@@ -44,9 +45,11 @@ Note: intermedie (`mandelbrot_build`) e app stanno in temp utente (il progetto
 può stare su share lenta); Vulkan bundled out-of-the-box, CUDA richiede
 driver + runtime utente (cuda-pathfinder); ritenzione `KEEP_N = 3` versioni
 per piattaforma in `dist/` (rimozione automatica delle più vecchie).
-Ordine: modifica → versione+STORICO+spec (§2) → `python build_app.py` →
-verifica → `git commit` automatico (a ogni salto di versione l'agente committa
+Ordine: modifica → versione+STORICO+spec (§2) → verifica →
+`git commit` automatico (a ogni salto di versione l'agente committa
 da solo, senza chiedere; messaggio `vX.Y.Z: descrizione`).
+La build con `python build_app.py` avviene solo su richiesta esplicita,
+fuori dall'ordine automatico.
 Dettaglio tecnico: `spec.md` §11.
 
 ## 4. Note operative
