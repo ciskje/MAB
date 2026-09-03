@@ -841,7 +841,7 @@ VERSION = "6.2.5"
 # non sopravvivono alla build PyInstaller, quindi il dialog legge da qui.
 # REGOLA BUMP: aggiungere la voce nuova in testa e tenere max 10.
 HISTORY = (
-    ("6.2.5", "2026-09-03", "Split: niente auto-calibrazione all'avvio; dropdown ratio + pulsante ricampiona."),
+    ("6.2.5", "2026-09-03", "Split: calibrazione on-demand, dropdown ratio fisso, label corrente, 2a riga."),
     ("6.2.4", "2026-09-03", "Benchmark usa lo split (Entrambe) quando attivo, come il render."),
     ("6.2.3", "2026-09-03", "Fix split CUDA: output locale alla banda (row0 solo per il calcolo)."),
     ("6.2.2", "2026-09-03", "Parity split con pattern-match sulla banda 2 (indagine seam)."),
