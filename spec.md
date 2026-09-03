@@ -273,11 +273,16 @@ Sotto solo scarti + gotcha API.
   il full-timer ritardato) e il risultato e' scartato se vista, dimensione
   canvas, palette, motore o precisione cambiano nel frattempo (snapshot
   esteso con `w,h`, non generazione); `self.pil` aggiornata così `Ctrl+S`
-  salva la versione antialiased. Un ricalcolo alla volta (secondo click:
-  `ricalcolo gia' in corso`). Guardia memoria: rifiuto prima di allocare
-  oltre `PHOTO_MAX_MPX_CPU/GPU` (16/64 Mpx totali; 8x su 1280x720 = 59 Mpx);
-  `MemoryError` -> errore pulito; workspace CPU gigante rimosso dalla cache
-  `_CPU_WS` dopo l'uso (non inquina gli entry interattivi).
+  salva la versione   antialiased. Un ricalcolo alla volta con accodamento latest-wins
+  (`_photo_pending`: richieste durante un ricalcolo rilanciano sulla vista
+  corrente a fine run). Guardia memoria dinamica (`_photo_mem_ok`, niente
+  tetto statico): stima B/px del frame grande per backend (CPU 56/96 f32/f64,
+  CUDA 8 host + 3 device, Metal 8 unified, Vulkan 10 host + 4 device) vs RAM
+  libera da OS (`GlobalMemoryStatusEx`/`AVPHYS_PAGES`) e VRAM libera da CUDA
+  (`memGetInfo`), con margine 25% + 1 GiB mai intaccato; rete di sicurezza a
+  128 Mpx solo se la query fallisce; `MemoryError` -> errore pulito;
+  workspace CPU gigante rimosso dalla cache `_CPU_WS` dopo l'uso (non inquina
+  gli entry interattivi).
 - Tema: Button/Checkbutton/Radiobutton nativi (mai colorati: su macOS
   degradano a flat illeggibili, lezione 5.4.2); colore solo su Label/Frame:
   status bar e barra accento (3px sopra il canvas) nel colore del motore

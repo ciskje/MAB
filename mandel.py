@@ -1,11 +1,17 @@
 # ============================================================================
 # Insieme di Mandelbrot - visualizzatore interattivo
-# VERSIONE: 6.0
+# VERSIONE: 6.1
 # ----------------------------------------------------------------------------
 # REGOLA: ogni modifica incrementa la versione e aggiunge una voce qui sotto
 # (formato: versione - data - descrizione modifiche).
 #
 # STORICO:
+# 6.1 - 2026-09-03
+#   - Ricalcolo NxN senza tetto statico: la memoria si misura davvero
+#     (_photo_mem_ok: stima B/px per backend vs RAM libera da OS e VRAM
+#     libera da CUDA memGetInfo, con margine 25% + 1 GiB mai intaccato;
+#     rete di sicurezza a 128 Mpx solo se la query fallisce). Il rifiuto
+#     riporta GiB richiesti vs disponibili.
 # 6.0 - 2026-09-03
 #   - Ricalcola: pulsante prima del dropdown ([Ricalcola][NxN]); la
 #     selezione NxN ricalcola subito (trace) e resta persistente (default
@@ -655,11 +661,90 @@ MI_AUTO_MIN, MI_AUTO_MAX = 50, 50000
 MIN_HALF = 1e-12  # clamp minimo per half (evita zoom infinito -> half=0, stato degenere)
 MIN_DIM = 50  # larghezza/altezza canvas minimi per considerare il canvas valido
 
-# v5.11.0: tetto ricalcolo NxN (antialiasing): oltre si rifiuta prima di
-# allocare (niente OOM/crash). CPU ~50/90 B/px (f32/f64, workspace _cpu_ws),
-# GPU ~6-8 B/px (host pinned + device). 8x su 1280x720 = 59 Mpx.
-PHOTO_MAX_MPX_CPU = 16.0
-PHOTO_MAX_MPX_GPU = 64.0
+# v6.1: niente tetto statico per il ricalcolo NxN: si stimano i byte
+# necessari e si confrontano con la memoria davvero disponibile (VRAM via
+# CUDA/Metal, RAM host via OS). Margine + riserva sotto.
+PHOTO_HEADROOM = 1.25  # margine 25% sulle stime
+PHOTO_HOST_RESERVE = 1 << 30  # 1 GiB di RAM mai intaccato
+PHOTO_BACKSTOP_MPX = 128.0  # rete di sicurezza SOLO se la memoria libera
+# non e' determinabile (query OS/driver fallita): oltre si rifiuta comunque.
+
+def _host_free_bytes():
+    """RAM libera (byte), senza nuove dipendenze: GlobalMemoryStatusEx su
+    Windows, sysconf AVPHYS_PAGES altrove. 0 se non determinabile."""
+    try:
+        import platform
+        if platform.system() == "Windows":
+            import ctypes
+            class _MS(ctypes.Structure):
+                _fields_ = [("dwLength", ctypes.c_ulong),
+                            ("dwMemoryLoad", ctypes.c_ulong),
+                            ("ullTotalPhys", ctypes.c_ulonglong),
+                            ("ullAvailPhys", ctypes.c_ulonglong),
+                            ("ullTotalPageFile", ctypes.c_ulonglong),
+                            ("ullAvailPageFile", ctypes.c_ulonglong),
+                            ("ullTotalVirtual", ctypes.c_ulonglong),
+                            ("ullAvailVirtual", ctypes.c_ulonglong),
+                            ("ullAvailExtendedVirtual", ctypes.c_ulonglong)]
+            st = _MS()
+            st.dwLength = ctypes.sizeof(_MS)
+            if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(st)):
+                return int(st.ullAvailPhys)
+        else:
+            import os
+            return int(os.sysconf("SC_PAGE_SIZE")) * int(os.sysconf("SC_AVPHYS_PAGES"))
+    except Exception:
+        pass
+    return 0
+
+def _cuda_free_bytes():
+    """(free, total) VRAM sul device CUDA selezionato; (0, 0) se illeggibile."""
+    try:
+        import cupy as cp
+        _dev = _CUDA_DEVICES[_CUDA_DEV][0] if _CUDA_DEVICES else 0
+        with cp.cuda.Device(_dev):
+            free, total = cp.cuda.runtime.memGetInfo()
+            return int(free), int(total)
+    except Exception:
+        return 0, 0
+
+def _photo_mem_ok(n, w, h):
+    """(ok, msg): il ricalcolo NxN ci sta nella memoria disponibile?
+    Stima per pixel del frame grande P=(n*w)*(n*h): CPU = workspace
+    (~50 B/px f32, ~90 f64) + RGB; CUDA = out device P*3 + pinned/host;
+    Metal (unified) = tutto in RAM condivisa; Vulkan = output u32 P*4
+    (heap VRAM non interrogabile via wgpu -> vale il check RAM host)."""
+    P = (n * w) * (n * h)
+    if _ACTIVE == "cpu":
+        need_h = P * ((50 if _PREC == "f32" else 90) + 6)
+        need_d = 0
+    elif _ACTIVE == "cuda":
+        need_h, need_d = P * 8, P * 3
+    elif _ACTIVE == "metal":
+        need_h, need_d = P * 8, 0
+    else:  # vulkan
+        need_h, need_d = P * 10, P * 4
+    free_h = _host_free_bytes()
+    if free_h > 0:
+        if need_h * PHOTO_HEADROOM > free_h - PHOTO_HOST_RESERVE:
+            return False, (f"ricalcolo {n}x{n} rifiutato: servono "
+                           f"~{need_h / 2**30:.1f} GiB di RAM "
+                           f"(liberi {free_h / 2**30:.1f})")
+    elif P / 1e6 > PHOTO_BACKSTOP_MPX:
+        return False, (f"ricalcolo {n}x{n} rifiutato: RAM non determinabile "
+                       f"e {P / 1e6:.1f} Mpx oltre la rete di sicurezza")
+    if _ACTIVE == "cuda":
+        free_d, _total_d = _cuda_free_bytes()
+        if free_d > 0:
+            if need_d * PHOTO_HEADROOM > free_d:
+                return False, (f"ricalcolo {n}x{n} rifiutato: servono "
+                               f"~{need_d / 2**30:.1f} GiB di VRAM "
+                               f"(liberi {free_d / 2**30:.1f})")
+        elif P / 1e6 > PHOTO_BACKSTOP_MPX:
+            return False, (f"ricalcolo {n}x{n} rifiutato: VRAM non "
+                           f"determinabile e {P / 1e6:.1f} Mpx oltre la rete "
+                           f"di sicurezza")
+    return True, ""
 
 def auto_mi(half):
     """Iterazioni 'auto' per una data half: formula unica condivisa da eff_mi
@@ -688,13 +773,14 @@ BENCH_REF = (
     ("5070 Ti CUDA (storico)", 350.0),
 )
 
-VERSION = "6.0"
+VERSION = "6.1"
 
 # Ultime 10 modifiche di versione per Help -> "Novità recenti..."
 # (versione, data, descrizione breve). Fonte embedded: i commenti STORICO
 # non sopravvivono alla build PyInstaller, quindi il dialog legge da qui.
 # REGOLA BUMP: aggiungere la voce nuova in testa e tenere max 10.
 HISTORY = (
+    ("6.1", "2026-09-03", "Ricalcolo NxN: memoria misurata davvero (VRAM/RAM), via tetto statico."),
     ("6.0", "2026-09-03", "Ricalcola prima del dropdown, scala persistente con ricalcolo immediato."),
     ("5.11.1", "2026-09-03", "Bugfix CUDA: guardia riga nel kernel (no piu' illegal access su NxN grande)."),
     ("5.10.2", "2026-09-03", "Preview draft a 1/8 solo su CPU (GPU a 1/4)."),
@@ -703,7 +789,6 @@ HISTORY = (
     ("5.9.8", "2026-09-03", "Zoom-out macOS: tasti globali + click destro x0.5."),
     ("5.9.7", "2026-09-03", "Bugfix Foto: typo nome pulsante, ora funziona."),
     ("5.9.6", "2026-09-03", "Pulsante Foto: vista a 2x con antialiasing (hourglass)."),
-    ("5.9.5", "2026-09-03", "Single-core: ora mostra il perche' (status+Info)."),
 )
 
 # ---------------- Palette (LUT 256x3 condivisa CPU/GPU) ----------------
@@ -2142,7 +2227,8 @@ class MandelbrotApp:
             "ricalcola subito e resta attiva (ogni vista successiva e' "
             "calcolata in quel modo); NxN ricalcola a N volte per lato con "
             "antialiasing (media NxN; 4x4 = 16x pixel, 8x8 = 64x pixel, "
-            "molto piu' lenti; oltre il tetto di memoria vengono rifiutati); "
+            "molto piu' lenti; se VRAM/RAM libere non bastano vengono "
+            "rifiutati); "
             "Benchmark esegue "
             "il test standardizzato di 8 s nella vista corrente."
         )
@@ -3092,13 +3178,11 @@ class MandelbrotApp:
             n = 2
         n = max(2, min(8, n))
         w, h = self.canvas_size()
-        mpx = (n * w) * (n * h) / 1e6
-        lim = PHOTO_MAX_MPX_CPU if _ACTIVE == "cpu" else PHOTO_MAX_MPX_GPU
-        if mpx > lim:
-            self.status.config(
-                text=(f"ricalcolo {n}x{n} rifiutato: {mpx:.1f} Mpx > limite "
-                      f"{lim:.0f} Mpx ({_ACTIVE}) — riduci la finestra o usa N minore"),
-                foreground=ERR_FG)
+        # v6.1: niente tetto statico: rifiuto solo se la stima supera la
+        # memoria davvero disponibile (VRAM + RAM).
+        ok, why = _photo_mem_ok(n, w, h)
+        if not ok:
+            self.status.config(text=why, foreground=ERR_FG)
             return
         view = (self.cx, self.cy, self.half, self.eff_mi(),
                 _PALETTE, _ACTIVE, _PREC, w, h)
