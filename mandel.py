@@ -7,8 +7,9 @@
 #
 # STORICO:
 # 6.2.5 - 2026-09-03
-#   - Pulsante ricampiona (\u21bb) accanto al dropdown GPU: rilancia
-#     calibrazione + parity in background, aggiorna status/titolo.
+#   - Niente calibrazione split all'avvio (era lenta e rumorosa); ora solo
+#     su richiesta col pulsante ricampiona. Dropdown ratio fisso:
+#     1/3 2/3, 50/50, 2/3 1/3. GPU selettore spostato nella 2a riga.
 # 6.2.4 - 2026-09-03
 #   - Benchmark usa lo split (Entrambe) quando attivo: non passa piu' buf
 #     dedicato, dispatcha sullo stesso percorso del render interattivo.
@@ -840,7 +841,7 @@ VERSION = "6.2.5"
 # non sopravvivono alla build PyInstaller, quindi il dialog legge da qui.
 # REGOLA BUMP: aggiungere la voce nuova in testa e tenere max 10.
 HISTORY = (
-    ("6.2.5", "2026-09-03", "Pulsante ricampiona split (calibrazione+parity on-demand)."),
+    ("6.2.5", "2026-09-03", "Split: niente auto-calibrazione all'avvio; dropdown ratio + pulsante ricampiona."),
     ("6.2.4", "2026-09-03", "Benchmark usa lo split (Entrambe) quando attivo, come il render."),
     ("6.2.3", "2026-09-03", "Fix split CUDA: output locale alla banda (row0 solo per il calcolo)."),
     ("6.2.2", "2026-09-03", "Parity split con pattern-match sulla banda 2 (indagine seam)."),
