@@ -69,7 +69,7 @@ Registro `PALETTES` (fonte unica): ordine = indice kernel (0 fuoco, 1 ghiaccio,
   I pulsanti sono disabilitati in auto; in auto il campo è disabilitato ma
   mostra il valore corrente; uscendo dall'auto, `mi` si congela sul valore
   auto corrente. Reset ripristina `mi = MI0 = 200` + auto.
-- Canvas sotto `MIN_DIM = 50` px è invalido → si usa 960x540.
+- Canvas sotto `MIN_DIM = 50` px è invalido → si usa 1280x720.
 
 ## 5. Backend e precisione
 - Rilevamento all'avvio in ordine di preferenza: CUDA > Metal > Vulkan > CPU
@@ -207,7 +207,7 @@ Sotto solo scarti + gotcha API.
 
 ## 8. UI e interazione
 ### 8.1 Vista e navigazione
-- Avvio: centro `(-0.5, 0)`, `half = 1.5`, canvas 960x540; asse y scalato `h/w`;
+- Avvio: centro `(-0.5, 0)`, `half = 1.5`, canvas 1280x720 (16:9); asse y scalato `h/w`;
   clamp `half >= MIN_HALF = 1e-12`.
 - Rotella x1.25/x0.8 al cursore; click x2 al cursore; `+`/`-` x2/x0.5 al centro
   (bind sul canvas: serve il focus; solo `r` minuscola); drag = pan.

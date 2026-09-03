@@ -1,11 +1,15 @@
 # ============================================================================
 # Insieme di Mandelbrot - visualizzatore interattivo
-# VERSIONE: 5.9.3
+# VERSIONE: 5.9.4
 # ----------------------------------------------------------------------------
 # REGOLA: ogni modifica incrementa la versione e aggiunge una voce qui sotto
 # (formato: versione - data - descrizione modifiche).
 #
 # STORICO:
+# 5.9.4 - 2026-09-03
+#   - UI: finestra default allargata a 1280x720 (sempre 16:9): la toolbar
+#     cresciuta (dropdown GPU) forzava la finestra oltre i 960px e il canvas
+#     si stirava perdendo il 16:9. Benchmark invariato a 960x540.
 # 5.9.3 - 2026-09-03
 #   - Benchmark: ref 4070 Super Vulkan corretto 177.0 -> 124 rendering/s
 #     (misurato in-app sul vero adapter; 177 era col bug pre-5.9.2 che
@@ -578,7 +582,10 @@ import numpy as np
 from PIL import Image, ImageTk
 
 # --- Costanti di vista e rendering ---
-INIT_W, INIT_H = 960, 540
+# v5.9.4: default 1280x720 (16:9, come prima): con la toolbar cresciuta
+# (dropdown GPU) 960px non bastavano e il canvas si stirava. Il benchmark
+# resta a 960x540 (BENCH, comparabilita' storica).
+INIT_W, INIT_H = 1280, 720
 CX0, CY0, HALF0 = -0.5, 0.0, 1.5
 MI0 = 200
 # Iterazioni "auto": mi = MI_AUTO_BASE * (1 + log10(HALF0/half)), clamp [50, 50000]
@@ -619,13 +626,14 @@ BENCH_REF = (
     ("5070 Ti CUDA (storico)", 350.0),
 )
 
-VERSION = "5.9.3"
+VERSION = "5.9.4"
 
 # Ultime 10 modifiche di versione per Help -> "Novità recenti..."
 # (versione, data, descrizione breve). Fonte embedded: i commenti STORICO
 # non sopravvivono alla build PyInstaller, quindi il dialog legge da qui.
 # REGOLA BUMP: aggiungere la voce nuova in testa e tenere max 10.
 HISTORY = (
+    ("5.9.4", "2026-09-03", "Finestra default 1280x720 (16:9)."),
     ("5.9.3", "2026-09-03", "Ref 4070 Super Vulkan corretto a 124."),
     ("5.9.2", "2026-09-03", "Dropdown GPU anche per Vulkan (adapter selezionabile)."),
     ("5.9.1", "2026-09-03", "Benchmark: worker in pausa, hint device; refs su GPU locali."),
@@ -635,7 +643,6 @@ HISTORY = (
     ("5.8.11", "2026-09-03", "Menu Help con Istruzioni e Informazioni (autore)."),
     ("5.8.10", "2026-09-04", "Etichetta CPU single/multi-core per precisione."),
     ("5.8.9", "2026-09-03", "Ritenzione dist/: ultime 3 versioni per piattaforma."),
-    ("5.8.8", "2026-09-02", "Fix nome GPU Metal (selector callable invocato)."),
 )
 
 # ---------------- Palette (LUT 256x3 condivisa CPU/GPU) ----------------
