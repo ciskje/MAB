@@ -1,11 +1,18 @@
 # ============================================================================
 # Insieme di Mandelbrot - visualizzatore interattivo
-# VERSIONE: 5.9.1
+# VERSIONE: 5.9.2
 # ----------------------------------------------------------------------------
 # REGOLA: ogni modifica incrementa la versione e aggiunge una voce qui sotto
 # (formato: versione - data - descrizione modifiche).
 #
 # STORICO:
+# 5.9.2 - 2026-09-03
+#   - Bugfix: il dropdown GPU pilotava solo CUDA; Vulkan usava sempre
+#     l'adapter high-performance (stesso per 4070/5070 Ti -> benchmark
+#     quasi uguali). Ora enumera gli adapter fisici (backend Vulkan) e il
+#     dropdown mostra quelli attivi per il motore corrente (CUDA/Vulkan);
+#     VulkanBackend.select_adapter() ricrea le risorse device-bound sotto
+#     lock. Selezione Vulkan persistita in config ("vulkan_adapter").
 # 5.9.1 - 2026-09-03
 #   - Bugfix benchmark su GPU display (es. 5070 Ti che pilota il desktop):
 #     durante gli 8 s il worker sospende i render interattivi (niente
@@ -608,13 +615,14 @@ BENCH_REF = (
     ("5070 Ti CUDA (storico)", 350.0),
 )
 
-VERSION = "5.9.1"
+VERSION = "5.9.2"
 
 # Ultime 10 modifiche di versione per Help -> "Novità recenti..."
 # (versione, data, descrizione breve). Fonte embedded: i commenti STORICO
 # non sopravvivono alla build PyInstaller, quindi il dialog legge da qui.
 # REGOLA BUMP: aggiungere la voce nuova in testa e tenere max 10.
 HISTORY = (
+    ("5.9.2", "2026-09-03", "Dropdown GPU anche per Vulkan (adapter selezionabile)."),
     ("5.9.1", "2026-09-03", "Benchmark: worker in pausa, hint device; refs su GPU locali."),
     ("5.9.0", "2026-09-03", "Dropdown scelta GPU se > 1 CUDA (persistita in config)."),
     ("5.8.13", "2026-09-03", "Colore UI: status e accento per motore, errori in rosso."),
@@ -624,7 +632,6 @@ HISTORY = (
     ("5.8.9", "2026-09-03", "Ritenzione dist/: ultime 3 versioni per piattaforma."),
     ("5.8.8", "2026-09-02", "Fix nome GPU Metal (selector callable invocato)."),
     ("5.8.7", "2026-09-02", "Ritenzione dist/: un artefatto per piattaforma garantito."),
-    ("5.8.6", "2026-09-02", "Icona .icns via Pillow (sips falliva su macOS 26.x)."),
 )
 
 # ---------------- Palette (LUT 256x3 condivisa CPU/GPU) ----------------
@@ -1110,14 +1117,22 @@ class VulkanBackend:
     """
     TH = 16  # workgroup 16x16 = 256 thread (sotto il max di AMD/NVIDIA/Intel)
 
-    def __init__(self):
+    def __init__(self, adapter=None):
         import wgpu
         self._w = wgpu
-        if not wgpu.gpu.enumerate_adapters_sync():
-            raise RuntimeError("nessun adapter GPU (Vulkan)")
-        adapter = wgpu.gpu.request_adapter_sync(power_preference="high-performance")
+        self._lock = threading.Lock()
         if adapter is None:
-            raise RuntimeError("nessun adapter (Vulkan)")
+            if not wgpu.gpu.enumerate_adapters_sync():
+                raise RuntimeError("nessun adapter GPU (Vulkan)")
+            adapter = wgpu.gpu.request_adapter_sync(power_preference="high-performance")
+            if adapter is None:
+                raise RuntimeError("nessun adapter (Vulkan)")
+        self._init_on_adapter(adapter)
+
+    def _init_on_adapter(self, adapter):
+        # (Ri)crea TUTTE le risorse device-bound su 'adapter'. Chiamato da
+        # __init__ (nessuna contesa ancora) e da select_adapter (sotto lock).
+        wgpu = self._w
         self.dev = adapter.request_device_sync()
         if self.dev is None:
             raise RuntimeError("device Vulkan fallito")
@@ -1138,7 +1153,12 @@ class VulkanBackend:
         self._out_size = 0
         self._bg = None
         self._bg_out = None
-        self._lock = threading.Lock()
+
+    def select_adapter(self, adapter):
+        # v5.9.2: cambio GPU a runtime (dropdown): ricrea device, pipeline,
+        # buffer e bind group sul nuovo adapter (mai in gara con compute()).
+        with self._lock:
+            self._init_on_adapter(adapter)
 
     def _make_lut_buffer(self):
         # Tutte le palette concatenate (ordine PALETTES = indice pal), u32
@@ -1200,13 +1220,84 @@ class VulkanBackend:
 
 _VULKAN_OK = False
 _VULKAN_BE = None
+# v5.9.2: adapter GPU fisici (backend Vulkan) enumerati all'avvio.
+# _VULKAN_ADAPTERS = [(indice_enum, nome)]; _VULKAN_DEV = posizione
+# selezionata (default 0). Il dropdown "GPU:" li mostra quando il motore
+# attivo e' Vulkan (prima pilotava solo CUDA: Vulkan usava sempre
+# l'high-performance -> benchmark quasi uguali su GPU diverse).
+_VULKAN_ADAPTERS = []
+_VULKAN_DEV = 0
 try:
     import wgpu  # wgpu-native: cross-platform (Windows/macOS/Linux)
-    _VULKAN_BE = VulkanBackend()
+    _enum = wgpu.gpu.enumerate_adapters_sync()
+    _seen = set()
+    for _ei, _a in enumerate(_enum):
+        try:
+            _inf = dict(_a.info)
+        except Exception:
+            continue
+        if _inf.get("backend_type") != "Vulkan":
+            continue
+        _key = (_inf.get("vendor_id"), _inf.get("device_id"))
+        if _key in _seen:
+            continue
+        _seen.add(_key)
+        _VULKAN_ADAPTERS.append((_ei, str(_inf.get("device", "GPU")).strip()))
+    if not _VULKAN_ADAPTERS:
+        raise RuntimeError("nessun adapter GPU (Vulkan)")
+    # default = stesso adapter di prima (high-performance): prima voce che
+    # matcha (vendor, device), altrimenti la prima enumerata.
+    try:
+        _hp = dict(wgpu.gpu.request_adapter_sync(
+            power_preference="high-performance").info)
+        _hpk = (_hp.get("vendor_id"), _hp.get("device_id"))
+        for _k, (_ei, _nm) in enumerate(_VULKAN_ADAPTERS):
+            _inf = dict(_enum[_ei].info)
+            if (_inf.get("vendor_id"), _inf.get("device_id")) == _hpk:
+                _VULKAN_ADAPTERS[0], _VULKAN_ADAPTERS[_k] = \
+                    _VULKAN_ADAPTERS[_k], _VULKAN_ADAPTERS[0]
+                break
+    except Exception:
+        pass
+    _VULKAN_BE = VulkanBackend(_enum[_VULKAN_ADAPTERS[0][0]])
     _VULKAN_OK = True
 except Exception:
     _VULKAN_OK = False
     _VULKAN_BE = None
+    _VULKAN_ADAPTERS = []
+    _VULKAN_DEV = 0
+
+
+def _vulkan_short_name(name):
+    # "NVIDIA GeForce RTX 5070 Ti" -> "GeForce RTX 5070 Ti" (dropdown compatto)
+    if name.startswith("NVIDIA "):
+        return name[len("NVIDIA "):]
+    return name
+
+def _vulkan_label(i):
+    return "%d: %s" % (i, _vulkan_short_name(_VULKAN_ADAPTERS[i][1]))
+
+def set_vulkan_adapter(i):
+    """Seleziona l'adapter Vulkan (posizione in _VULKAN_ADAPTERS); True se ok.
+    Ricrea le risorse device-bound via backend (sotto lock) e invalida la
+    cache hw_name."""
+    global _VULKAN_DEV
+    if _VULKAN_BE is None or not _VULKAN_ADAPTERS:
+        return False
+    try:
+        i = int(i)
+    except (TypeError, ValueError):
+        return False
+    i = max(0, min(i, len(_VULKAN_ADAPTERS) - 1))
+    try:
+        import wgpu
+        _enum = wgpu.gpu.enumerate_adapters_sync()
+        _VULKAN_BE.select_adapter(_enum[_VULKAN_ADAPTERS[i][0]])
+    except Exception:
+        return False
+    _VULKAN_DEV = i
+    _HW_CACHE.pop("vulkan", None)
+    return True
 
 # ---------------- Selezione backend (v5.6.0) ----------------
 # Quattro backend selezionabili a runtime:
@@ -1740,6 +1831,15 @@ def _warmup_cuda_device():
     except Exception:
         pass
 
+def _warmup_vulkan_adapter():
+    # v5.9.2: come sopra per l'adapter Vulkan appena selezionato.
+    if _ACTIVE != "vulkan":
+        return
+    try:
+        compute_gpu(CX0, CY0, HALF0, 64, 64, 64, prec="f32")
+    except Exception:
+        pass
+
 if _GPU:
     threading.Thread(target=_gpu_warmup, daemon=True).start()
 threading.Thread(target=_numba_warmup, daemon=True).start()
@@ -1798,19 +1898,13 @@ class MandelbrotApp:
             if not _backend_ok(_be):
                 _b.config(state="disabled")
         self.backend_btns[_ACTIVE].select()
-        # v5.9.0: dropdown scelta GPU (solo se CuPy rileva > 1 device).
+        # v5.9.0/v5.9.2: dropdown scelta GPU: contenuto per motore attivo
+        # (device CUDA / adapter Vulkan), visibile solo se > 1.
+        self.gpu_frame = tk.Frame(bk)
+        tk.Label(self.gpu_frame, text="GPU:").pack(side="left")
         self.gpu_var = None
         self.gpu_menu = None
-        if len(_CUDA_DEVICES) > 1:
-            gf = tk.Frame(bk)
-            gf.pack(side="left", padx=(10, 0))
-            tk.Label(gf, text="GPU:").pack(side="left")
-            self.gpu_var = tk.StringVar(value=_cuda_label(_CUDA_DEV))
-            self.gpu_menu = tk.OptionMenu(
-                gf, self.gpu_var,
-                *[_cuda_label(i) for i in range(len(_CUDA_DEVICES))],
-                command=self.choose_gpu_device)
-            self.gpu_menu.pack(side="left", padx=2, pady=3)
+        self._refresh_gpu_menu()
         pl = tk.Frame(self.ctl)
         pl.pack(side="left", padx=12)
         tk.Label(pl, text="Palette:").pack(side="left")
@@ -1913,7 +2007,7 @@ class MandelbrotApp:
             "tasti + / - per zoom x2 / x0.5 al centro, r per il reset.\n\n"
             "Motore e precisione: toolbar Motore (CPU / CUDA / Metal / Vulkan) "
             "e Precisione (f32 / f64); i backend non disponibili restano grigi. "
-            "Con piu' GPU CUDA, il dropdown GPU sceglie il device. "
+            "Con piu' GPU, il dropdown GPU sceglie device/adapter del motore. "
             "CUDA richiede driver NVIDIA + runtime; Vulkan funziona out-of-the-box.\n\n"
             "Iterazioni: Auto calcola mi dallo zoom; in manuale si imposta il "
             "valore (Invio) o lo si cambia di \u00b11000.\n\n"
@@ -2153,14 +2247,44 @@ class MandelbrotApp:
     def set_backend(self, b):
         if not self._select_backend(b):
             return
+        self._refresh_gpu_menu()
         self._sync_precision_buttons()
         self._refresh_title()
         self.request_render("motore: " + b.upper())
 
+    def _gpu_labels(self):
+        # v5.9.2: voci del dropdown per il motore attivo (vuoto = nascosto).
+        if _ACTIVE == "cuda" and len(_CUDA_DEVICES) > 1:
+            return [_cuda_label(i) for i in range(len(_CUDA_DEVICES))]
+        if _ACTIVE == "vulkan" and len(_VULKAN_ADAPTERS) > 1:
+            return [_vulkan_label(i) for i in range(len(_VULKAN_ADAPTERS))]
+        return []
+
+    def _gpu_pos(self):
+        return _VULKAN_DEV if _ACTIVE == "vulkan" else _CUDA_DEV
+
+    def _refresh_gpu_menu(self):
+        # v5.9.2: ricostruisce il dropdown per il motore attivo (set_backend,
+        # load config, reset); nascosto se il motore ha <= 1 GPU.
+        if self.gpu_menu is not None:
+            self.gpu_menu.destroy()
+            self.gpu_menu = None
+            self.gpu_var = None
+        labels = self._gpu_labels()
+        if not labels:
+            self.gpu_frame.pack_forget()
+            return
+        self.gpu_frame.pack(side="left", padx=(10, 0))
+        self.gpu_var = tk.StringVar(value=labels[self._gpu_pos()])
+        self.gpu_menu = tk.OptionMenu(self.gpu_frame, self.gpu_var, *labels,
+                                      command=self.choose_gpu_device)
+        self.gpu_menu.pack(side="left", padx=2, pady=3)
+
     def _sync_gpu_menu(self):
-        # v5.9.0: allinea il dropdown al device corrente (load config/reset).
-        if self.gpu_var is not None:
-            self.gpu_var.set(_cuda_label(_CUDA_DEV))
+        # v5.9.0: allinea il valore senza ricostruire (dopo una selezione).
+        labels = self._gpu_labels()
+        if self.gpu_var is not None and labels:
+            self.gpu_var.set(labels[self._gpu_pos()])
 
     def _select_cuda_device(self, i):
         if not set_cuda_device(i):
@@ -2168,12 +2292,30 @@ class MandelbrotApp:
         self._sync_gpu_menu()
         return True
 
+    def _select_vulkan_adapter(self, i):
+        # v5.9.2: come sopra per l'adapter Vulkan.
+        if not set_vulkan_adapter(i):
+            return False
+        self._sync_gpu_menu()
+        return True
+
     def choose_gpu_device(self, label):
-        # v5.9.0: cambio GPU dal dropdown ("<id>: <nome>").
+        # v5.9.0/v5.9.2: cambio GPU dal dropdown ("<id>: <nome>").
         try:
             _id = int(str(label).split(":", 1)[0])
         except (TypeError, ValueError):
             self._sync_gpu_menu()
+            return
+        if _ACTIVE == "vulkan":
+            if 0 <= _id < len(_VULKAN_ADAPTERS) and _id != _VULKAN_DEV:
+                self._select_vulkan_adapter(_id)
+                self._refresh_title()
+                threading.Thread(target=_warmup_vulkan_adapter,
+                                 daemon=True).start()
+                self.request_render("gpu: " + _vulkan_short_name(
+                    _VULKAN_ADAPTERS[_VULKAN_DEV][1]))
+            else:
+                self._sync_gpu_menu()
             return
         _pos = next((k for k, (d, _n) in enumerate(_CUDA_DEVICES) if d == _id),
                     None)
@@ -2205,6 +2347,8 @@ class MandelbrotApp:
         self._select_palette("fuoco")
         self._select_backend(_default_backend())
         self._select_cuda_device(0)
+        self._select_vulkan_adapter(0)
+        self._refresh_gpu_menu()
         self._select_precision("f32")
         self._sync_precision_buttons()
         self._refresh_title()
@@ -2407,6 +2551,7 @@ class MandelbrotApp:
         c = dict(precision=_PREC, palette=_PALETTE,
                  backend=_ACTIVE,
                  cuda_device=_CUDA_DEV,
+                 vulkan_adapter=_VULKAN_DEV,
                  bench=dict(self.bench))
         try:
             d = os.path.dirname(CONFIG_PATH)
@@ -2443,6 +2588,10 @@ class MandelbrotApp:
         self._select_backend(be)
         # v5.9.0: device CUDA persistito (set_cuda_device clamp-a il range).
         self._select_cuda_device(c.get("cuda_device", 0))
+        # v5.9.2: adapter Vulkan persistito (idem); poi il dropdown segue il
+        # motore attivo (potrebbe cambiare contenuto rispetto all'avvio).
+        self._select_vulkan_adapter(c.get("vulkan_adapter", 0))
+        self._refresh_gpu_menu()
         # la precisione va DOPO il motore: la disponibilita' di f64 dipende
         # dallo slot GPU corrente (set_prec la rifiuta se lo slot non la fa).
         self._select_precision(c.get("precision", "f32"))
