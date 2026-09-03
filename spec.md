@@ -209,8 +209,10 @@ Sotto solo scarti + gotcha API.
 ### 8.1 Vista e navigazione
 - Avvio: centro `(-0.5, 0)`, `half = 1.5`, canvas 1280x720 (16:9); asse y scalato `h/w`;
   clamp `half >= MIN_HALF = 1e-12`.
-- Rotella x1.25/x0.8 al cursore; click x2 al cursore; `+`/`-` x2/x0.5 al centro
-  (bind sul canvas: serve il focus; solo `r` minuscola); drag = pan.
+- Rotella x1.25/x0.8 al cursore; click x2 al cursore; click destro x0.5 al
+  cursore (due dita sul trackpad; bind su `ButtonPress-2/3`); `+`/`-` x2/x0.5
+  al centro e `r` = reset legati alla finestra (`root.bind` con guardia che
+  li ignora col focus su una `Entry`; il click sul canvas prende il focus).
 - `r` = reset; `Ctrl+S` (bind su root) = salva PNG.
 
 ### 8.2 Layout, titolo, status

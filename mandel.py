@@ -1,11 +1,16 @@
 # ============================================================================
 # Insieme di Mandelbrot - visualizzatore interattivo
-# VERSIONE: 5.9.7
+# VERSIONE: 5.9.8
 # ----------------------------------------------------------------------------
 # REGOLA: ogni modifica incrementa la versione e aggiunge una voce qui sotto
 # (formato: versione - data - descrizione modifiche).
 #
 # STORICO:
+# 5.9.8 - 2026-09-03
+#   - Zoom-out su macOS: tasti + / - / r legati alla finestra (prima solo
+#     col focus sul canvas, dopo un click in toolbar sembravano morti;
+#     guardia per non rubarli alle Entry) e click destro (due dita sul
+#     trackpad) = zoom x0.5 al cursore, senza dipendere dalla rotella.
 # 5.9.7 - 2026-09-03
 #   - Bugfix Foto: typo self._photo_btn (attributo inesistente) faceva
 #     fallire take_photo prima dell'hourglass: il pulsante non faceva
@@ -644,13 +649,14 @@ BENCH_REF = (
     ("5070 Ti CUDA (storico)", 350.0),
 )
 
-VERSION = "5.9.7"
+VERSION = "5.9.8"
 
 # Ultime 10 modifiche di versione per Help -> "Novità recenti..."
 # (versione, data, descrizione breve). Fonte embedded: i commenti STORICO
 # non sopravvivono alla build PyInstaller, quindi il dialog legge da qui.
 # REGOLA BUMP: aggiungere la voce nuova in testa e tenere max 10.
 HISTORY = (
+    ("5.9.8", "2026-09-03", "Zoom-out macOS: tasti globali + click destro x0.5."),
     ("5.9.7", "2026-09-03", "Bugfix Foto: typo nome pulsante, ora funziona."),
     ("5.9.6", "2026-09-03", "Pulsante Foto: vista a 2x con antialiasing (hourglass)."),
     ("5.9.5", "2026-09-03", "Single-core: ora mostra il perche' (status+Info)."),
@@ -660,7 +666,6 @@ HISTORY = (
     ("5.9.1", "2026-09-03", "Benchmark: worker in pausa, hint device; refs su GPU locali."),
     ("5.9.0", "2026-09-03", "Dropdown scelta GPU se > 1 CUDA (persistita in config)."),
     ("5.8.13", "2026-09-03", "Colore UI: status e accento per motore, errori in rosso."),
-    ("5.8.12", "2026-09-03", "Help: voce Novità recenti con le ultime 10 modifiche."),
 )
 
 # ---------------- Palette (LUT 256x3 condivisa CPU/GPU) ----------------
@@ -2066,8 +2071,10 @@ class MandelbrotApp:
                  foreground=_backend_fg()).pack(anchor="w")
         text = (
             "Navigazione: rotella per zoomare al cursore (x1.25 / x0.8), "
-            "click per zoom x2 al cursore, trascinamento per spostare la vista, "
-            "tasti + / - per zoom x2 / x0.5 al centro, r per il reset.\n\n"
+            "click per zoom x2 al cursore, click destro (due dita sul trackpad) "
+            "per zoom x0.5 al cursore, trascinamento per spostare la vista, "
+            "tasti + / - per zoom x2 / x0.5 al centro (funzionano sempre, "
+            "tranne mentre si scrive nelle caselle), r per il reset.\n\n"
             "Motore e precisione: toolbar Motore (CPU / CUDA / Metal / Vulkan) "
             "e Precisione (f32 / f64); i backend non disponibili restano grigi. "
             "Con piu' GPU, il dropdown GPU sceglie device/adapter del motore. "
@@ -2141,14 +2148,43 @@ class MandelbrotApp:
         self.dragged = False
         self._size = (0, 0)
         self.root.bind("<Control-s>", lambda e: self.save_png())
+        # v5.9.8: tasti zoom/reset legati alla FINESTRA (non al canvas):
+        # prima valevano solo col focus sul canvas, dopo un click su
+        # bottoni/caselle sembravano morti (tipico su macOS). La guardia
+        # in _key_zoom evita di rubare i tasti mentre si scrive in entry.
+        self.root.bind("<Key-r>", lambda e: self._key_reset())
+        self.root.bind("<Key-plus>", lambda e: self._key_zoom(2.0))
+        self.root.bind("<Key-minus>", lambda e: self._key_zoom(0.5))
         self.canvas.bind("<ButtonPress-1>", self.on_press)
         self.canvas.bind("<B1-Motion>", self.on_drag)
         self.canvas.bind("<ButtonRelease-1>", self.on_release)
+        # v5.9.8: click destro (due dita sul trackpad) = zoom x0.5 al
+        # cursore: alternativa alla rotella che non dipende dagli eventi
+        # MouseWheel. Bind su 2 e 3 (mapping destro su macOS/X11).
+        self.canvas.bind("<ButtonPress-2>",
+                         lambda e: self.zoom_at(*self.p2c(e.x, e.y), 0.5))
+        self.canvas.bind("<ButtonPress-3>",
+                         lambda e: self.zoom_at(*self.p2c(e.x, e.y), 0.5))
         self.canvas.bind("<MouseWheel>", self.on_wheel)
         self.canvas.bind("<Configure>", self.on_configure)
-        self.canvas.bind("<Key-r>", lambda e: self.reset())
-        self.canvas.bind("<Key-plus>", lambda e: self.zoom_center(2.0))
-        self.canvas.bind("<Key-minus>", lambda e: self.zoom_center(0.5))
+
+    def _key_zoom(self, f):
+        # Zoom da tastiera: ignorato solo mentre il focus e' su una Entry
+        # (l'utente sta digitando, es. '-' nelle iterazioni).
+        try:
+            if isinstance(self.root.focus_get(), tk.Entry):
+                return
+        except Exception:
+            pass
+        self.zoom_center(f)
+
+    def _key_reset(self):
+        try:
+            if isinstance(self.root.focus_get(), tk.Entry):
+                return
+        except Exception:
+            pass
+        self.reset()
 
     # ---------------- Helper UI ----------------
     def _refresh_title(self):
@@ -2233,6 +2269,10 @@ class MandelbrotApp:
         self.zoom_at(self.cx, self.cy, f)
 
     def on_press(self, e):
+        try:
+            self.canvas.focus_set()
+        except Exception:
+            pass
         self.press_pos = (e.x, e.y)
         self.dragged = False
 
