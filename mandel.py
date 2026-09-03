@@ -3149,10 +3149,12 @@ class MandelbrotApp:
                 continue
             view, w, h, gen = job
             try:
+                self.root.after(0, lambda: self.root.config(cursor="watch"))
                 t0 = time.perf_counter()
                 img = compute(view[0], view[1], view[2], w, h, view[3], my_gen=gen)
                 rt = time.perf_counter() - t0
             except Exception:
+                self.root.after(0, lambda: self.root.config(cursor=""))
                 continue
             if _GEN[0] != gen:
                 continue  # obsoleto (vista cambiata): scarto il frame parziale
@@ -3178,6 +3180,7 @@ class MandelbrotApp:
         self.root.after(30, self._poll)
 
     def _show(self, img, msg, rt=0.0):
+        self.root.config(cursor="")
         w, h = self.canvas_size()
         if img.size != (w, h):
             img = img.resize((w, h), Image.NEAREST)
