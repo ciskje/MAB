@@ -3027,7 +3027,7 @@ class MandelbrotApp:
 
     def _sync_split_widgets(self):
         """Mostra/nasconde ratio+calibra in base a 'Entrambe' selezionata."""
-        _split = _ACTIVE == "cuda" and len(_CUDA_DEVICES) >= 2 and _CUDA_SPLIT
+        _split = _ACTIVE == "cuda" and len(_CUDA_DEVICES) >= 2 and _CUDA_SPLIT_ON
         if getattr(self, "gpu_ratio_menu", None) is not None:
             if _split:
                 self.gpu_ratio_menu.pack(side="left", padx=(4, 0), pady=3)
