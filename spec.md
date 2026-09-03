@@ -195,9 +195,12 @@ Sotto solo scarti + gotcha API.
 
 ## 7. Pipeline (asincrona, latest-wins)
 - Worker daemon + `Condition` + slot job singolo; request in coda collassano
-  sull'ultimo. Durante il benchmark il worker scarta i job (render
-  interattivi sospesi: niente contesa col thread bench sullo stesso device,
-  su GPU display evita TDR/reset).
+  sull'ultimo. Durante il benchmark il worker scarta i job E il ricalcolo NxN
+  e' sospeso (`take_photo` rifiuta, `_maybe_full` non lancia, pendenti
+  cancellati: niente contesa col thread bench sullo stesso device, su GPU
+  display evita TDR/reset e conteggi crollati). Bench chiesto durante una
+  foto parte accodato a fine ricalcolo (`_bench_after_photo`); a fine bench
+  la vista si rinfresca con la scala persistente (`recalc_scaled`).
 - `_submit`: `self._gen += 1; _GEN[0] = self._gen` (`_GEN` =
   `np.zeros(1, int32)`); worker scarta il frame se `_GEN[0] != gen` prima di
   `frames.put` (mostrato poi da `_poll`).
@@ -315,9 +318,11 @@ Sotto solo scarti + gotcha API.
 | val | -0.7499302568795561 | -0.015139113925433963 | 5.226737155905588e-05 | 960x540 | 8.0 | sempre `auto_mi(half)` = 10915 |
 
 - Esegue nel modo corrente (motore + f32/f64 di toolbar, GPU/adapter
-  selezionato); CUDA usa buffer proprio (allocato sul device scelto),
-  Metal/Vulkan output proprio, CPU memoria numpy. Per gli 8 s ha la GPU in
-  esclusiva (worker in pausa, §7); se il device è occupato/in reset il dialog
+  selezionato) ma SEMPRE 1x1 fisso (960x540 da config, mai NxN: la scala
+  persistente non tocca il bench); CUDA usa buffer proprio (allocato sul
+  device scelto), Metal/Vulkan output proprio, CPU memoria numpy. Per gli
+  8 s ha la GPU in esclusiva (worker in pausa E ricalcolo NxN sospeso, §7);
+  se il device è occupato/in reset il dialog
   FALLITO lo segnala con hint (riprovare o riavviare).
 - Report: dialog con `rendering/s` grande (42 pt, `#2ea44f`), statistiche
   (n. rendering, ms/render), grafico + griglia parametri (riga `Hardware` da

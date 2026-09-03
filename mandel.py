@@ -1,11 +1,19 @@
 # ============================================================================
 # Insieme di Mandelbrot - visualizzatore interattivo
-# VERSIONE: 6.1
+# VERSIONE: 6.1.1
 # ----------------------------------------------------------------------------
 # REGOLA: ogni modifica incrementa la versione e aggiunge una voce qui sotto
 # (formato: versione - data - descrizione modifiche).
 #
 # STORICO:
+# 6.1.1 - 2026-09-03
+#   - Benchmark sempre in esclusiva GPU (era solo vs worker interattivo):
+#     il ricalcolo NxN concorrente sullo stesso device crollava il conteggio
+#     (es. CUDA < 10 invece di ~250). take_photo rifiutato durante il bench,
+#     _maybe_full sospeso, pendenti cancellati; bench chiesto durante una
+#     foto parte accodato a fine ricalcolo; a fine bench la vista si
+#     rinfresca con la scala persistente. Il bench resta sempre 1x1 fisso
+#     (960x540 da config, mai NxN).
 # 6.1 - 2026-09-03
 #   - Ricalcolo NxN senza tetto statico: la memoria si misura davvero
 #     (_photo_mem_ok: stima B/px per backend vs RAM libera da OS e VRAM
@@ -773,22 +781,23 @@ BENCH_REF = (
     ("5070 Ti CUDA (storico)", 350.0),
 )
 
-VERSION = "6.1"
+VERSION = "6.1.1"
 
 # Ultime 10 modifiche di versione per Help -> "Novità recenti..."
 # (versione, data, descrizione breve). Fonte embedded: i commenti STORICO
 # non sopravvivono alla build PyInstaller, quindi il dialog legge da qui.
 # REGOLA BUMP: aggiungere la voce nuova in testa e tenere max 10.
 HISTORY = (
+    ("6.1.1", "2026-09-03", "Benchmark in esclusiva GPU anche vs ricalcolo NxN (conteggi stabili)."),
     ("6.1", "2026-09-03", "Ricalcolo NxN: memoria misurata davvero (VRAM/RAM), via tetto statico."),
     ("6.0", "2026-09-03", "Ricalcola prima del dropdown, scala persistente con ricalcolo immediato."),
     ("5.11.1", "2026-09-03", "Bugfix CUDA: guardia riga nel kernel (no piu' illegal access su NxN grande)."),
+    ("5.11.0", "2026-09-03", "Ricalcola unico con scala 1x1/2x2/4x4/8x8 e guardia memoria."),
     ("5.10.2", "2026-09-03", "Preview draft a 1/8 solo su CPU (GPU a 1/4)."),
     ("5.10.1", "2026-09-03", "Rinomina Foto NxN in Ricalcola NxN."),
     ("5.10.0", "2026-09-03", "Foto 2x2 + Foto 4x4 (NxN) e pulsante Ricalcola."),
     ("5.9.8", "2026-09-03", "Zoom-out macOS: tasti globali + click destro x0.5."),
     ("5.9.7", "2026-09-03", "Bugfix Foto: typo nome pulsante, ora funziona."),
-    ("5.9.6", "2026-09-03", "Pulsante Foto: vista a 2x con antialiasing (hourglass)."),
 )
 
 # ---------------- Palette (LUT 256x3 condivisa CPU/GPU) ----------------
@@ -2624,6 +2633,7 @@ class MandelbrotApp:
         self._bench_running = False
         self._bench_result = None
         self._bench_finished = False
+        self._bench_after_photo = False
         self._photo_running = False
         self._photo_result = None
         self._photo_finished = False
@@ -2657,6 +2667,10 @@ class MandelbrotApp:
     def _maybe_full(self, view):
         self._full_timer = None
         if (self.cx, self.cy, self.half, self.eff_mi()) == view:
+            # v6.1.1: durante il benchmark niente full (ne' 1x1 ne' NxN):
+            # la GPU e' del bench; al termine _bench_done rinfresca.
+            if getattr(self, "_bench_running", False):
+                return
             # v6.0: con scala NxN persistente il full va in antialiasing
             # (la preview draft resta leggera per l'interazione).
             if self._recalc_n() > 1:
@@ -3085,6 +3099,25 @@ class MandelbrotApp:
         if not self._bench_ask():
             self.status.config(text="benchmark annullato")
             return
+        # v6.1.1: mai in contesa col ricalcolo NxN sullo stesso device
+        # (un kernel gigante in parallelo al bench crollava il conteggio).
+        # Se una foto e' in corso, il bench parte accodato a fine ricalcolo.
+        if getattr(self, "_photo_running", False):
+            self._bench_after_photo = True
+            self._photo_pending = False
+            self.status.config(text="ricalcolo in corso: il benchmark parte appena pronto...")
+            return
+        self._start_bench()
+
+    def _start_bench(self):
+        # v6.1.1: avvio effettivo (immediato o accodato da _photo_done).
+        # Il bench ha la GPU in esclusiva: cancella foto pendenti e il
+        # full-timer (niente take_photo concorrente per gli 8 s).
+        self._bench_after_photo = False
+        self._photo_pending = False
+        if self._full_timer is not None:
+            self.root.after_cancel(self._full_timer)
+            self._full_timer = None
         self._bench_running = True
         self.root.config(cursor="watch")
         self.status.config(text=f"benchmark in corso ({self.bench['secs']:.0f} s)...")
@@ -3131,6 +3164,9 @@ class MandelbrotApp:
         self.root.config(cursor="")
         self.status.config(text="benchmark completato")
         self._bench_result_dialog(count, secs, err)
+        # v6.1.1: rinfresca la vista corrente (durante il bench i render
+        # erano sospesi); rispetta la scala NxN persistente.
+        self.recalc_scaled()
 
     def recalc(self):
         # v5.10.0: rifa il rendering della vista corrente (preview + full).
@@ -3168,6 +3204,10 @@ class MandelbrotApp:
         # durante il calcolo scarta invece di mostrare uno stirato NEAREST).
         # v6.0: se un ricalcolo e' gia' in corso, la richiesta non si perde
         # (pending latest-wins: _photo_done rilancia sulla vista corrente).
+        # v6.1.1: durante il benchmark niente foto (GPU in esclusiva al bench).
+        if getattr(self, "_bench_running", False):
+            self.status.config(text="benchmark in corso (ricalcolo sospeso)")
+            return
         if getattr(self, "_photo_running", False):
             self._photo_pending = True
             self.status.config(text="ricalcolo accodato (parte appena pronto)...")
@@ -3232,10 +3272,15 @@ class MandelbrotApp:
         # cursore e pulsanti, come _bench_done.
         # v6.0: se durante il calcolo e' arrivata un'altra richiesta
         # (pending), rilancia sulla vista corrente con la scala persistente.
+        # v6.1.1: ma il benchmark accodato ha precedenza (esclusiva GPU).
         self._photo_result = None
         self._photo_running = False
         self.recalc_btn.config(state="normal")
         self.root.config(cursor="")
+        if getattr(self, "_bench_after_photo", False):
+            self._photo_pending = False
+            self._start_bench()
+            return
         if self._photo_pending:
             self._photo_pending = False
             self.recalc_scaled()
