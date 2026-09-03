@@ -253,9 +253,12 @@ Sotto solo scarti + gotcha API.
   mostra la media 2x2 su RGB (`take_photo`/`_photo_worker`/`_photo_done`;
   box-filter sull'output, unico code-path per tutti i backend dato che la
   GPU colora in-kernel); cursore `watch` durante il calcolo, ripristino in
-  `_photo_done()` (unico punto di uscita, anche su errore); risultato
-  scartato se la vista cambia nel frattempo (confronto vista + `_GEN`);
-  `self.pil` aggiornata così `Ctrl+S` salva la versione antialiased.
+  `_photo_done()` (unico punto di uscita, anche su errore); all'avvio
+  invalida i render interattivi in volo/pendenti (bump `_GEN` + cancella
+  il full-timer ritardato) e il risultato e' scartato se vista, palette,
+  motore o precisione cambiano nel frattempo (snapshot esteso, non
+  generazione); `self.pil` aggiornata così `Ctrl+S` salva la versione
+  antialiased.
 - Tema: Button/Checkbutton/Radiobutton nativi (mai colorati: su macOS
   degradano a flat illeggibili, lezione 5.4.2); colore solo su Label/Frame:
   status bar e barra accento (3px sopra il canvas) nel colore del motore

@@ -1,11 +1,18 @@
 # ============================================================================
 # Insieme di Mandelbrot - visualizzatore interattivo
-# VERSIONE: 5.9.6
+# VERSIONE: 5.9.7
 # ----------------------------------------------------------------------------
 # REGOLA: ogni modifica incrementa la versione e aggiunge una voce qui sotto
 # (formato: versione - data - descrizione modifiche).
 #
 # STORICO:
+# 5.9.7 - 2026-09-03
+#   - Bugfix Foto: typo self._photo_btn (attributo inesistente) faceva
+#     fallire take_photo prima dell'hourglass: il pulsante non faceva
+#     nulla. Rinominato in self.photo_btn (creato in _build_toolbar).
+#     Inoltre la foto ora invalida i render interattivi in volo/pendenti
+#     (bump _GEN + cancella full-timer) e lo scarto stantio confronta
+#     vista+palette+motore+precisione invece della generazione.
 # 5.9.6 - 2026-09-03
 #   - Pulsante Foto: ricalcola la vista a 2x per lato (4x pixel) e la
 #     mostra con antialiasing (media 2x2 su RGB, uguale per tutti i
@@ -637,13 +644,14 @@ BENCH_REF = (
     ("5070 Ti CUDA (storico)", 350.0),
 )
 
-VERSION = "5.9.6"
+VERSION = "5.9.7"
 
 # Ultime 10 modifiche di versione per Help -> "Novità recenti..."
 # (versione, data, descrizione breve). Fonte embedded: i commenti STORICO
 # non sopravvivono alla build PyInstaller, quindi il dialog legge da qui.
 # REGOLA BUMP: aggiungere la voce nuova in testa e tenere max 10.
 HISTORY = (
+    ("5.9.7", "2026-09-03", "Bugfix Foto: typo nome pulsante, ora funziona."),
     ("5.9.6", "2026-09-03", "Pulsante Foto: vista a 2x con antialiasing (hourglass)."),
     ("5.9.5", "2026-09-03", "Single-core: ora mostra il perche' (status+Info)."),
     ("5.9.4", "2026-09-03", "Finestra default 1280x720 (16:9)."),
@@ -653,7 +661,6 @@ HISTORY = (
     ("5.9.0", "2026-09-03", "Dropdown scelta GPU se > 1 CUDA (persistita in config)."),
     ("5.8.13", "2026-09-03", "Colore UI: status e accento per motore, errori in rosso."),
     ("5.8.12", "2026-09-03", "Help: voce Novità recenti con le ultime 10 modifiche."),
-    ("5.8.11", "2026-09-03", "Menu Help con Istruzioni e Informazioni (autore)."),
 )
 
 # ---------------- Palette (LUT 256x3 condivisa CPU/GPU) ----------------
@@ -2505,8 +2512,8 @@ class MandelbrotApp:
             self._bench_done(count, secs, err)
         if self._photo_finished:
             self._photo_finished = False
-            img, view, gen, rt, err = self._photo_result
-            self._photo_done(img, view, gen, rt, err)
+            img, view, rt, err = self._photo_result
+            self._photo_done(img, view, rt, err)
         self.root.after(30, self._poll)
 
     def _show(self, img, msg, rt=0.0):
@@ -2927,25 +2934,37 @@ class MandelbrotApp:
         # v5.9.6: foto antialiasing: ricalcola la vista corrente a 2x per
         # lato (4x pixel) e mostra la media 2x2 dei pixel vicini. Eseguita
         # in background (come il benchmark): cursore hourglass, UI viva.
-        # Per vedere la foto bisogna aspettare senza toccare: se la vista
-        # cambia durante il calcolo, la foto stantia viene scartata.
+        # Per vedere la foto bisogna aspettare senza toccare: se vista,
+        # palette, motore o precisione cambiano durante il calcolo, la
+        # foto stantia viene scartata.
+        # v5.9.7: all'avvio invalida i render interattivi in volo/pendenti
+        # (stessa vista): bump di _GEN (ferma le bande CPU, fa scartare il
+        # frame al worker) + cancella il full-render ritardato di
+        # request_render, altrimenti sovrascriverebbero la foto con la
+        # versione non antialiased.
         if getattr(self, "_photo_running", False):
             self.status.config(text="foto gia' in corso")
             return
         w, h = self.canvas_size()
-        view = (self.cx, self.cy, self.half, self.eff_mi())
+        view = (self.cx, self.cy, self.half, self.eff_mi(),
+                _PALETTE, _ACTIVE, _PREC)
+        if self._full_timer is not None:
+            self.root.after_cancel(self._full_timer)
+            self._full_timer = None
+        self._gen += 1
+        _GEN[0] = self._gen
         self._photo_running = True
-        self._photo_btn.config(state="disabled")
+        self.photo_btn.config(state="disabled")
         self.root.config(cursor="watch")
         self.status.config(text="foto in corso (antialiasing 2x, non toccare)...")
-        threading.Thread(target=self._photo_worker, args=(view, w, h, self._gen),
+        threading.Thread(target=self._photo_worker, args=(view, w, h),
                          daemon=True).start()
 
-    def _photo_worker(self, view, w, h, gen):
+    def _photo_worker(self, view, w, h):
         # Box-filter 2x2 sullo spazio RGB: unico code-path per tutti i
         # backend (la GPU colora in-kernel, nessun it/mag su host).
-        # my_gen=0 -> nessuna cancellazione durante il calcolo (il
-        # risultato stantio e' scartato in _photo_done, non qui).
+        # Nessuna cancellazione durante il calcolo (il risultato stantio
+        # e' scartato in _photo_done, non qui).
         t0 = time.perf_counter()
         try:
             big = compute(view[0], view[1], view[2], 2 * w, 2 * h, view[3])
@@ -2954,21 +2973,22 @@ class MandelbrotApp:
             a = np.asarray(big)
             small = (a.reshape(h, 2, w, 2, 3).mean(axis=(1, 3)) + 0.5).astype(np.uint8)
             img = Image.fromarray(small, "RGB")
-            self._photo_result = (img, view, gen, time.perf_counter() - t0, None)
+            self._photo_result = (img, view, time.perf_counter() - t0, None)
         except Exception as ex:
-            self._photo_result = (None, view, gen, 0.0, str(ex))
+            self._photo_result = (None, view, 0.0, str(ex))
         self._photo_finished = True
 
-    def _photo_done(self, img, view, gen, rt, err):
+    def _photo_done(self, img, view, rt, err):
         # Unico punto di uscita (anche in errore): ripristina sempre
         # cursore e pulsante, come _bench_done.
         self._photo_result = None
         self._photo_running = False
-        self._photo_btn.config(state="normal")
+        self.photo_btn.config(state="normal")
         self.root.config(cursor="")
         if err:
             self.status.config(text=f"foto fallita: {err}")
-        elif _GEN[0] != gen or (self.cx, self.cy, self.half, self.eff_mi()) != view:
+        elif (self.cx, self.cy, self.half, self.eff_mi(),
+                _PALETTE, _ACTIVE, _PREC) != view:
             self.status.config(text="foto scartata (vista cambiata)")
         else:
             self._show(img, "foto antialiasing 2x", rt)
