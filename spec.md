@@ -93,10 +93,10 @@ Registro `PALETTES` (fonte unica): ordine = indice kernel (0 fuoco, 1 ghiaccio,
 
 - GPU multipla: dropdown `GPU:` nella 2a riga toolbar, contenuto per motore
   attivo (nascosto se il motore ha <= 1 GPU). CUDA: device da `_CUDA_DEVICES`
-  (`gpu1`/`gpu2`/...) + voce `Entrambe (split NN/MM)` (v6.2): spartisce ogni
+  (`gpu1`/`gpu2`/...) + voce `Entrambe (split)` (v6.2): spartisce ogni
   render in bande orizzontali sulle prime 2 CUDA con rapporto fisso
-  (v6.2.5: dropdown 1/3 2/3, 50/50, 2/3 1/3; calibrazione automatica solo su
-  richiesta col pulsante ricampiona, non all'avvio);
+  (v6.2.5: dropdown 33% 66% / 50% 50% / 66% 33% + label corrente;
+  calibrazione automatica solo su richiesta col pulsante ricampiona);
    kernel con offset `row0` (bit-identico al single), buffer device separati
    per banda (`_CUDA_SPLIT_BUFS`), cucitura su host pinned, fallback single
    in errore; sotto 32 px di altezza resta single (soglia tecnica). Render
