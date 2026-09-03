@@ -2900,6 +2900,7 @@ class MandelbrotApp:
                                       command=self.choose_gpu_device)
         self.gpu_menu.pack(side="left", padx=2, pady=3)
         # Bottone ricampiona le GPU + dropdown ratio + label ratio (solo CUDA + 2+).
+        # v6.2.5: visibili solo quando "Entrambe" e' selezionata.
         if _ACTIVE == "cuda" and len(_CUDA_DEVICES) >= 2:
             self.gpu_ratio_var = tk.StringVar(
                 value=self._ratio_label())
@@ -2907,13 +2908,11 @@ class MandelbrotApp:
                 self.gpu_frame, self.gpu_ratio_var,
                 "33/66", "40/60", "50/50", "60/40", "66/33",
                 command=self._set_split_ratio)
-            self.gpu_ratio_menu.pack(side="left", padx=(4, 0), pady=3)
             self.gpu_ratio_lbl = tk.Label(self.gpu_frame, text=self._ratio_pct())
-            self.gpu_ratio_lbl.pack(side="left", padx=(4, 0), pady=3)
             self.gpu_cal_btn = tk.Button(
                 self.gpu_frame, text="\u21bb", width=2,
                 command=self._recalibrate_split)
-            self.gpu_cal_btn.pack(side="left", padx=(2, 0), pady=3)
+            self._sync_split_widgets()
 
     def _ratio_pct(self):
         """Stringa percentuale corrente es. '33/66'."""
@@ -2994,6 +2993,7 @@ class MandelbrotApp:
             if set_cuda_split(True):
                 self._refresh_title()
                 self._sync_gpu_menu()
+                self._sync_split_widgets()
                 self.request_render("gpu: entrambe (split)")
             else:
                 self._sync_gpu_menu()
@@ -3021,8 +3021,22 @@ class MandelbrotApp:
             return
         self._select_cuda_device(_pos)
         self._refresh_title()
+        self._sync_split_widgets()
         threading.Thread(target=_warmup_cuda_device, daemon=True).start()
         self.request_render("gpu: " + _cuda_short_name(_CUDA_DEVICES[_CUDA_DEV][1]))
+
+    def _sync_split_widgets(self):
+        """Mostra/nasconde ratio+calibra in base a 'Entrambe' selezionata."""
+        _split = _ACTIVE == "cuda" and len(_CUDA_DEVICES) >= 2 and _CUDA_SPLIT
+        if getattr(self, "gpu_ratio_menu", None) is not None:
+            if _split:
+                self.gpu_ratio_menu.pack(side="left", padx=(4, 0), pady=3)
+                self.gpu_ratio_lbl.pack(side="left", padx=(4, 0), pady=3)
+                self.gpu_cal_btn.pack(side="left", padx=(2, 0), pady=3)
+            else:
+                self.gpu_ratio_menu.pack_forget()
+                self.gpu_ratio_lbl.pack_forget()
+                self.gpu_cal_btn.pack_forget()
 
     def choose_palette(self, name):
         self._select_palette(name)
