@@ -2374,10 +2374,7 @@ def _warmup_vulkan_adapter():
 if _GPU:
     threading.Thread(target=_gpu_warmup, daemon=True).start()
 threading.Thread(target=_numba_warmup, daemon=True).start()
-# v6.2: calibrazione split in background se 2+ CUDA (warmup incluso per
-# entrambe; rapporto pronto quando si seleziona "Entrambe").
-if _CUDA_OK and len(_CUDA_DEVICES) >= 2:
-    threading.Thread(target=_cuda_calibrate_split, daemon=True).start()
+# v6.2.5: calibrazione split SOLO su richiesta (pulsante ↻), non all'avvio.
 
 # v5.1.0: il benchmark segue la modalita' corrente (motore+precisione
 # selezionati nell'app); per mostrarla nel dialog si usa backend().
@@ -2881,10 +2878,15 @@ class MandelbrotApp:
             self.gpu_menu.destroy()
             self.gpu_menu = None
             self.gpu_var = None
-        # v6.2.5: rimuovi eventuale bottone calibra (lo ricrei se serve).
+        # v6.2.5: rimuovi eventuali widget split (li ricreo se servono).
         if getattr(self, "gpu_cal_btn", None) is not None:
             self.gpu_cal_btn.destroy()
             self.gpu_cal_btn = None
+        if getattr(self, "gpu_ratio_menu", None) is not None:
+            self.gpu_ratio_menu.destroy()
+            self.gpu_ratio_menu = None
+        if getattr(self, "gpu_ratio_var", None) is not None:
+            self.gpu_ratio_var = None
         labels = self._gpu_labels()
         if not labels:
             self.gpu_frame.pack_forget()
@@ -2894,12 +2896,40 @@ class MandelbrotApp:
         self.gpu_menu = tk.OptionMenu(self.gpu_frame, self.gpu_var, *labels,
                                       command=self.choose_gpu_device)
         self.gpu_menu.pack(side="left", padx=2, pady=3)
-        # Bottone ricampiona le GPU (visibile solo se CUDA + 2+ device).
+        # Bottone ricampiona le GPU + dropdown ratio (solo CUDA + 2+ device).
         if _ACTIVE == "cuda" and len(_CUDA_DEVICES) >= 2:
+            self.gpu_ratio_var = tk.StringVar(
+                value=self._ratio_label())
+            self.gpu_ratio_menu = tk.OptionMenu(
+                self.gpu_frame, self.gpu_ratio_var,
+                "1/3 2/3", "50/50", "2/3 1/3",
+                command=self._set_split_ratio)
+            self.gpu_ratio_menu.pack(side="left", padx=(4, 0), pady=3)
             self.gpu_cal_btn = tk.Button(
                 self.gpu_frame, text="\u21bb", width=2,
                 command=self._recalibrate_split)
             self.gpu_cal_btn.pack(side="left", padx=(2, 0), pady=3)
+
+    def _ratio_label(self):
+        """Label corrente dal _CUDA_SPLIT_RATIO."""
+        r = _CUDA_SPLIT_RATIO
+        if abs(r - 1.0/3) < 0.05:
+            return "1/3 2/3"
+        elif abs(r - 2.0/3) < 0.05:
+            return "2/3 1/3"
+        return "50/50"
+
+    def _set_split_ratio(self, label):
+        """Imposta il rapporto split dal dropdown."""
+        global _CUDA_SPLIT_RATIO
+        if label == "1/3 2/3":
+            _CUDA_SPLIT_RATIO = 1.0 / 3.0
+        elif label == "2/3 1/3":
+            _CUDA_SPLIT_RATIO = 2.0 / 3.0
+        else:
+            _CUDA_SPLIT_RATIO = 0.5
+        self._refresh_title()
+        self.request_render("split ratio: " + label)
 
     def _recalibrate_split(self):
         """Ricalibra il rapporto split + parity (background)."""
@@ -2955,8 +2985,6 @@ class MandelbrotApp:
             if set_cuda_split(True):
                 self._refresh_title()
                 self._sync_gpu_menu()
-                threading.Thread(target=_cuda_calibrate_split,
-                                 daemon=True).start()
                 self.request_render("gpu: entrambe (split)")
             else:
                 self._sync_gpu_menu()
