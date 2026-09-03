@@ -1,11 +1,14 @@
 # ============================================================================
 # Insieme di Mandelbrot - visualizzatore interattivo
-# VERSIONE: 5.10.1
+# VERSIONE: 5.10.2
 # ----------------------------------------------------------------------------
 # REGOLA: ogni modifica incrementa la versione e aggiunge una voce qui sotto
 # (formato: versione - data - descrizione modifiche).
 #
 # STORICO:
+# 5.10.2 - 2026-09-03
+#   - Preview draft a 1/8 (invece di 1/4) solo quando e' la CPU a farla;
+#     GPU invariata a 1/4.
 # 5.10.1 - 2026-09-03
 #   - Rinomina: "Foto 2x2"/"Foto 4x4" -> "Ricalcola 2x2"/"Ricalcola 4x4"
 #     (label, help e messaggi di stato; nomi interni invariati).
@@ -657,13 +660,14 @@ BENCH_REF = (
     ("5070 Ti CUDA (storico)", 350.0),
 )
 
-VERSION = "5.10.1"
+VERSION = "5.10.2"
 
 # Ultime 10 modifiche di versione per Help -> "Novità recenti..."
 # (versione, data, descrizione breve). Fonte embedded: i commenti STORICO
 # non sopravvivono alla build PyInstaller, quindi il dialog legge da qui.
 # REGOLA BUMP: aggiungere la voce nuova in testa e tenere max 10.
 HISTORY = (
+    ("5.10.2", "2026-09-03", "Preview draft a 1/8 solo su CPU (GPU a 1/4)."),
     ("5.10.1", "2026-09-03", "Rinomina Foto NxN in Ricalcola NxN."),
     ("5.10.0", "2026-09-03", "Foto 2x2 + Foto 4x4 (NxN) e pulsante Ricalcola."),
     ("5.9.8", "2026-09-03", "Zoom-out macOS: tasti globali + click destro x0.5."),
@@ -673,7 +677,6 @@ HISTORY = (
     ("5.9.4", "2026-09-03", "Finestra default 1280x720 (16:9)."),
     ("5.9.3", "2026-09-03", "Ref 4070 Super Vulkan corretto a 124."),
     ("5.9.2", "2026-09-03", "Dropdown GPU anche per Vulkan (adapter selezionabile)."),
-    ("5.9.1", "2026-09-03", "Benchmark: worker in pausa, hint device; refs su GPU locali."),
 )
 
 # ---------------- Palette (LUT 256x3 condivisa CPU/GPU) ----------------
@@ -2510,7 +2513,10 @@ class MandelbrotApp:
             self._full_timer = None
         w, h = self.canvas_size()
         view = (self.cx, self.cy, self.half, self.eff_mi())
-        self._submit(view, max(w // 4, 16), max(h // 4, 16))
+        # v5.10.2: preview draft a 1/8 SOLO se fatta dalla CPU (4x pixel in
+        # meno -> bozza pronta prima durante l'interazione); GPU resta a 1/4.
+        div = 8 if _ACTIVE == "cpu" else 4
+        self._submit(view, max(w // div, 16), max(h // div, 16))
         self._full_timer = self.root.after(500, lambda: self._maybe_full(view))
 
     def _maybe_full(self, view):

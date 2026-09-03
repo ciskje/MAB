@@ -202,8 +202,9 @@ Sotto solo scarti + gotcha API.
   per hoisting in `prange`, §12.4); fallback numpy ogni iterazione.
   `my_gen = 0` disattiva il check (uso interno benchmark).
   GPU non cancellabile (render tipico sotto 160 ms), solo scarto post-render.
-- `request_render`: preview `max(w//4,16)` immediata, poi full dopo 500 ms solo
-  se vista invariata. Poll UI ogni 30 ms (`after`), resize `NEAREST`.
+- `request_render`: preview immediata `max(w//div,16)` con `div = 8` se CPU
+  (draft leggero durante l'interazione), `div = 4` su GPU; poi full dopo
+  500 ms solo se vista invariata. Poll UI ogni 30 ms (`after`), resize `NEAREST`.
 
 ## 8. UI e interazione
 ### 8.1 Vista e navigazione
