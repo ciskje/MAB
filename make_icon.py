@@ -27,9 +27,8 @@ img.save(ico, sizes=[(16, 16), (24, 24), (32, 32), (48, 48),
 print("icona generata:", png)
 print("icona generata:", ico)
 
-# Icona macOS (solo darwin): mandelbrot.icns da icon_src.png via sips (tool nativo macOS)
+# Icona macOS (solo darwin): mandelbrot.icns da icon_src.png via Pillow (sips inaffidabile)
 if sys.platform == "darwin":
-    import subprocess
     icns = os.path.join(HERE, "mandelbrot.icns")
-    subprocess.run(["sips", "-s", "format", "icns", png, "--out", icns], check=True)
+    img.save(icns, format="ICNS", sizes=[(s, s) for s in (16, 32, 64, 128, 256, 512, 1024)])
     print("icona generata:", icns)

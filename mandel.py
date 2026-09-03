@@ -1,11 +1,34 @@
 # ============================================================================
 # Insieme di Mandelbrot - visualizzatore interattivo
-# VERSIONE: 5.8.5
+# VERSIONE: 5.8.10
 # ----------------------------------------------------------------------------
 # REGOLA: ogni modifica incrementa la versione e aggiunge una voce qui sotto
 # (formato: versione - data - descrizione modifiche).
 #
 # STORICO:
+# 5.8.10 - 2026-09-04
+#   - UI: backend() CPU mostra sempre single/multi-core per la precisione
+#     corrente ("CPU f32 multi-core" col kernel Numba parallelo,
+#     "CPU f32 single-core (numpy)" col fallback). Prima mostrava "(numpy)"
+#     solo a import Numba fallito, ma il fallback scatta per precisione
+#     (_NUMBA_OK[prec]) e l'etichetta poteva mentire. Il titolo si aggiorna
+#     a ogni frame (_show) cosi' segue il warmup single->multi.
+# 5.8.9 - 2026-09-03
+#   - Build: regola di ritenzione dist/ ora tiene le ultime KEEP_N versioni
+#     PER PIATTAFORMA (win64.zip e macos.dmg separatamente, max 3 ciascuna).
+#     Prima teneva 3 totali con vincolo min-1/piattaforma.
+# 5.8.8 - 2026-09-02
+#   - Bugfix: hw_name() su Metal restituiva il repr del native-selector pyobjc
+#     ("<native-selector name of <AGXG13GDevice...>...") invece del nome GPU
+#     (es. "Apple M1"). Ora se dev.name e' callable (selector) viene invocato.
+# 5.8.7 - 2026-09-02
+#   - Build: regola di ritenzione dist/ garantisce ora SEMPRE almeno un artefatto
+#     per piattaforma (win64.zip + macos.dmg), anche se supera KEEP_N. Prima
+#     keep_last_n_dist(3) poteva azzerare una piattaforma se l'altra aveva >= 3
+#     versioni. Documentata in AGENTS.md/spec.md.
+# 5.8.6 - 2026-09-02
+#   - Build macOS: make_icon.py genera ora mandelbrot.icns via Pillow (formato ICNS,
+#     multi-size 16-1024) al posto di sips, che fallisce su macOS 26.x (error 13).
 # 5.8.5 - 2026-09-02
 #   - Build: regola generale di ritenzione artefatti. build_app.py a fine build tiene
 #     solo le ultime KEEP_N (3) versioni di zip (win) / .dmg (mac) in dist/ (NAS) e
@@ -547,7 +570,7 @@ BENCH_REF = (
     ("5070 Ti CUDA (storico)", 250.0),
 )
 
-VERSION = "5.8.5"
+VERSION = "5.8.10"
 
 # ---------------- Palette (LUT 256x3 condivisa CPU/GPU) ----------------
 _FIRE = (
@@ -1514,9 +1537,16 @@ def backend():
     # Metal/Vulkan sono f32-only, CUDA f32 (+f64 se il kernel e' compilato).
     # v5.6.1: se Numba e' assente la CPU usa il fallback numpy single-core ->
     # lo segnalo nell'etichetta (titolo + barra di stato), prima era silenzioso.
+    # v5.8.10: indicazione single/multi-core esplicita e PER PRECISIONE: il
+    # fallback numpy scatta per singola precisione (_NUMBA_OK[prec], vedi
+    # compute_cpu), quindi l'etichetta segue _NUMBA_OK[_PREC] e non il solo
+    # import (_NUMBA_AVAILABLE). Prima del warmup _NUMBA_OK e' False e i primi
+    # render usano davvero il fallback -> "single-core" e' veritiero.
     if _ACTIVE != "cpu":
         return _ACTIVE.upper() + " " + _PREC
-    return "CPU " + _PREC + ("" if _NUMBA_AVAILABLE else " (numpy)")
+    if _NUMBA_OK.get(_PREC):
+        return "CPU " + _PREC + " multi-core"
+    return "CPU " + _PREC + " single-core (numpy)"
 
 _HW_CACHE = {}
 
@@ -1556,7 +1586,8 @@ def hw_name():
             if isinstance(name, bytes):
                 name = name.decode("utf-8", "replace")
         elif _ACTIVE == "metal":
-            name = str(_METAL_BE.dev.name)
+            _n = _METAL_BE.dev.name
+            name = str(_n() if callable(_n) else _n)
         elif _ACTIVE == "vulkan":
             name = str(_VULKAN_BE.name)
     except Exception:
@@ -2013,6 +2044,9 @@ class MandelbrotApp:
         self.canvas.delete("all")
         self.canvas.create_image(w // 2, h // 2, image=self.photo)
         self.status.config(text=f"{msg} | {backend()} \u00b7 {hw_name()} | palette: {_PALETTE} | render: {rt*1000:.0f} ms")
+        # v5.8.10: il titolo segue il warmup Numba (single->multi a warmup
+        # concluso); backend() e' ricalcolato a ogni frame, il titolo no.
+        self._refresh_title()
 
     # ---------------- File: PNG, zona (JSON), config ----------------
     def save_png(self):

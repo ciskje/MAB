@@ -23,8 +23,8 @@ IS_DARWIN = (sys.platform == "darwin")
 WORKDIR = os.path.join(tempfile.gettempdir(), "mandelbrot_build")
 DISTDIR = os.path.join(tempfile.gettempdir(), "mandelbrot_dist")
 DMGDIR = os.path.join(tempfile.gettempdir(), "mandelbrot_dmg")
-# Regola generale: su dist/ (progetto/NAS) tenere SOLO le ultime KEEP_N versioni
-# dei distributivi (Mandelbrot-v<X.Y.Z>-win64.zip / -macos.dmg); le piu' vecchie
+# Regola generale: su dist/ (progetto/NAS) tenere le ultime KEEP_N versioni
+# PER PIATTAFORMA (win64.zip e macos.dmg separatamente); le piu' vecchie
 # vengono rimosse automaticamente a fine build.
 KEEP_N = 3
 
@@ -44,28 +44,34 @@ def fail(msg):
 
 
 def keep_last_n_dist(n=KEEP_N):
-    # Tieni solo le ultime n versioni (X.Y.Z) dei distributivi in dist/
-    # (progetto/NAS); rimuovi gli artefatti delle versioni piu' vecchie.
+    # Tieni le ultime n versioni (X.Y.Z) PER PIATTAFORMA dei distributivi
+    # in dist/ (progetto/NAS); rimuovi gli artefatti delle versioni piu' vecchie.
     d = os.path.join(HERE, "dist")
     if not os.path.isdir(d):
         return
     items = []
     for fn in os.listdir(d):
-        m = re.match(r"mandelbrot-v(\d+)\.(\d+)\.(\d+)-", fn, re.IGNORECASE)
+        m = re.match(r"mandelbrot-v(\d+)\.(\d+)\.(\d+)-(win64|macos)\.", fn, re.IGNORECASE)
         if m:
-            items.append(((int(m.group(1)), int(m.group(2)), int(m.group(3))), fn))
+            ver = (int(m.group(1)), int(m.group(2)), int(m.group(3)))
+            plat = m.group(4).lower()
+            items.append((ver, fn, plat))
     if not items:
         print("cleanup dist/: nessun artefatto versionato")
         return
-    items.sort(key=lambda x: x[0], reverse=True)
-    keep = set(v for v, _ in items[:n])
-    removed = [fn for v, fn in items if v not in keep]
+    keep = set()
+    for plat in set(p for _, _, p in items):
+        plat_items = sorted([(v, fn) for v, fn, p in items if p == plat],
+                           key=lambda x: x[0], reverse=True)
+        for _, fn in plat_items[:n]:
+            keep.add(fn)
+    removed = [fn for _, fn, _ in items if fn not in keep]
     for fn in removed:
         os.remove(os.path.join(d, fn))
     if removed:
         print("cleanup dist/: rimosse", ", ".join(sorted(removed)))
     else:
-        print("cleanup dist/: ok (ultime %d versioni trattenute)" % n)
+        print("cleanup dist/: ok (%d per piattaforma trattenute)" % n)
 
 
 # 1) Icona (icon_src.png + mandelbrot.ico + mandelbrot.icns su macOS) via motore CPU di mandel.py

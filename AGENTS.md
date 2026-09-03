@@ -1,74 +1,58 @@
 # Convenzioni del progetto
 
-## Struttura del progetto
-- `mandel.py` — il programma (visualizzatore interattivo, Tkinter + 4 backend
-  selezionabili: CPU (numpy/Numba), CUDA (CuPy), Metal (pyobjc), Vulkan (wgpu),
-  con fallback CPU); versione in **due punti** che devono coincidere (header
-  `# VERSIONE:` per build + costante runtime `VERSION` per titolo/JSON) e
-  STORICO nel commento iniziale del file (fonte di verità).
-- `spec.md` — specifica del programma; DEVE restare in sync col sorgente
-   (vedi regola di versionamento sotto).
-- `mandelbrot_*.json` — zone salvate dall'app (dato utente, gitignorato).
-- `build_app.py` — script di build self-contained (one-dir) multipiattaforma
-  (icona → PyInstaller → post). `mandelbrot.spec` = ricetta PyInstaller
-  multipiattaforma; `hook_dlldir.py` = runtime hook Windows (percorso DLL per CuPy);
-  `make_icon.py` = genera `icon_src.png` + `mandelbrot.ico` (+ `mandelbrot.icns` su macOS).
+## 1. Struttura e file
+Git traccia solo i sorgenti; tutto il resto è generato o dato utente.
 
-## Versionamento sorgente (OBBLIGATORIO)
-Ogni modifica a `mandel.py` (o ad altri sorgenti Python del
-progetto) DEVE:
- 1. Incrementare la versione in `mandel.py` in **entrambi** i punti, che
-     DEVONO coincidere (se divergono, il titolo/JSON mostrano una versione
-     diversa da EXE/.app/zip):
-       - l'header `# VERSIONE: X.Y.Z` nel blocco di commento iniziale (è quello
-         che `mandelbrot.spec`/`build_app.py` leggono per EXE/.app/zip);
-       - la costante runtime `VERSION = "X.Y.Z"` (usata in titolo finestra +
-         JSON zona).
-     - bugfix = patch (x.y.Z), modifica minima (es. un dialog in piu, un testo,
-       un opzione) = patch (x.y.Z), modifica funzionale = minor (x.Y.0),
-       riscrittura/architettura = major (X.0.0)
-2. Aggiungere una voce allo STORICO nello stesso blocco, formato:
-   `VERSIONE - AAAA-MM-GG - descrizione delle modifiche`.
-3. Aggiornare `spec.md` in modo che rispecchi il nuovo stato del programma
-   (la spec DEVE restare sempre in sincronia col sorgente).
-Il blocco è intitolato "Insieme di Mandelbrot - visualizzatore interattivo"
-e si trova in cima al file.
+| file | ruolo |
+|---|---|
+| `mandel.py` | il programma (Tkinter + 4 backend: CPU numpy/Numba, CUDA CuPy, Metal pyobjc, Vulkan wgpu; fallback CPU). Fonte di verità per versione + STORICO (blocco `Insieme di Mandelbrot - visualizzatore interattivo` in cima) |
+| `spec.md` | specifica; resta in sync col sorgente (regola §2) |
+| `build_app.py` | unico script di build (icona → PyInstaller → post); dettaglio in `spec.md` §11 |
+| `mandelbrot.spec` | ricetta PyInstaller multipiattaforma |
+| `hook_dlldir.py` | runtime hook Windows (`os.add_dll_directory` su EXE + `_internal`) |
+| `make_icon.py` | genera `icon_src.png` + `mandelbrot.ico` (+ `.icns` su macOS) |
 
-## Build dell'app (multipiattaforma, OBBLIGATORIA prima di ogni commit)
-Prima di committare DEVE essere rigenerata l'app self-contained (one-dir, con
-`python build_app.py` — solo su richiesta, non automatica), così l'artefatto
-riflette il sorgente. Intermedie (build/) e app one-dir vanno sul **disco di
-sistema** (temp utente); sul **progetto/NAS** resta solo l'artefatto distributivo:
-- **Windows** → app `Mandelbrot/Mandelbrot.exe` + `_internal/` su disco di sistema
-  (CPU sempre; GPU Vulkan (wgpu) bundled e subito disponibile; GPU CuPy incluso ma
-  **runtime CUDA NON bundled**: la GPU CUDA funziona solo se l'utente installa
-  driver NVIDIA + runtime CUDA, che CuPy trova via cuda-pathfinder da
-  `CUDA_PATH`/PATH/Program Files) + zip `dist/Mandelbrot-v<ver>-win64.zip` sul NAS;
-- **macOS** → app `Mandelbrot.app` su disco di sistema (GPU Metal/pyobjc +
-  Vulkan/wgpu, firma ad-hoc) + `.dmg` `dist/Mandelbrot-v<ver>-macos.dmg` sul NAS.
-- **Regola generale (ritenzione artefatti)**: su `dist/` (progetto/NAS) tenere
-  SOLO le ultime **3 versioni** dei distributivi (`KEEP_N` in `build_app.py`);
-  a ogni build `build_app.py` rimuove automaticamente gli zip/.dmg delle versioni
-  piu' vecchie. Per cambiarne il numero, modificare `KEEP_N`.
-- Ordine: modifica sorgente → **`python build_app.py`** → (verifica) → `git commit`.
-- File: `build_app.py` (unico script, ramificato su `sys.platform`: icona →
-  PyInstaller → post → zip su Windows / .dmg su macOS) + `mandelbrot.spec` (ricetta
-  PyInstaller multipiattaforma) + `hook_dlldir.py` (runtime hook Windows:
-  `os.add_dll_directory` su cartella EXE + `_internal`, difensivo per le DLL
-  bundled) + `make_icon.py` (`icon_src.png` + `mandelbrot.ico` + `mandelbrot.icns` su macOS).
-- `dist/`, `build/`, `mandelbrot.icns`, `mandelbrot.ico`, `icon_src.png` sono
-  gitignorati: l'app NON va committata, ma va SEMPRE rigenerata prima del commit
-  per lasciarla aggiornata.
-- Dettaglio tecnico: sezione "Build dell'app (multipiattaforma)" di `spec.md`.
+Mai in git (gitignorati): `dist/` (anche gli zip/`.dmg` distributivi), `build/`,
+`icon_src.png`, `mandelbrot.ico/.icns`, `mandelbrot_*.json` (zone utente),
+config utente.
 
-## Note operative
-- Gotchas di implementazione (bit-identità, numpy FMA, Numba, vincoli CuPy,
-  Metal/pyobjc (v5.4.0), `__constant__`, pinned memory): vedi la sezione "Note
-  tecniche" di `spec.md` (casa unica, più dettagliata).
-- Ambiente: la GPU è condivisa con il server LLM locale (llama.cpp) che NON va
-  fermato (l'agente gira su quello stesso server). I benchmark GPU hanno rumore di
-  fondo: usare workload bounded (n launch fissi, non loop a tempo) e confrontare
-  versioni a parità di condizioni (o meglio: A/B nello stesso processo alternato).
-- Dopo pause lunghe (>~10 s, es. render CPU da 3–18 s) il GPU torna a clock idle: la
-  prima misura GPU è 10–15× più lenta del valore a regime. Scalare il clock con un
-  breve burst prima di misurare.
+## 2. Versionamento sorgente (OBBLIGATORIO)
+Solo per modifiche a sorgenti Python (`mandel.py` e altri `.py`).
+Le modifiche alla sola `spec.md`/doc non richiedono bump.
+Ogni modifica bumper DEVE:
+1. Incrementare `mandel.py` in entrambi i punti (devono coincidere):
+   header `# VERSIONE: X.Y.Z` (letto da `mandelbrot.spec`/`build_app.py`) e
+   costante `VERSION = "X.Y.Z"` (titolo + JSON zona).
+   Livelli: patch `x.y.Z` (bugfix o modifica minima: un dialog, un testo,
+   un'opzione); minor `x.Y.0` (funzione nuova/cambiata); major `X.0.0`
+   (riscrittura/architettura).
+2. Aggiungere voce allo STORICO (`VERSIONE - AAAA-MM-GG - descrizione`).
+3. Aggiornare `spec.md` al nuovo stato (sempre in sincronia).
+
+## 3. Build dell'app (multipiattaforma)
+Principio: l'agente non builda mai in automatico; builda solo con
+`python build_app.py` su richiesta esplicita, e comunque prima di ogni commit
+che tocca i sorgenti — così l'artefatto su filesystem riflette il sorgente.
+L'artefatto non va mai committato (`dist/` è gitignorato).
+
+| piattaforma | app (disco di sistema, temp) | distributivo (progetto/NAS, `dist/`) |
+|---|---|---|
+| Windows | `mandelbrot_dist/Mandelbrot/Mandelbrot.exe` + `_internal/` | `dist/Mandelbrot-v<ver>-win64.zip` |
+| macOS | `mandelbrot_dist/Mandelbrot.app` (firma ad-hoc) | `dist/Mandelbrot-v<ver>-macos.dmg` |
+
+Note: intermedie (`mandelbrot_build`) e app stanno in temp utente (il progetto
+può stare su share lenta); Vulkan bundled out-of-the-box, CUDA richiede
+driver + runtime utente (cuda-pathfinder); ritenzione `KEEP_N = 3` versioni
+per piattaforma in `dist/` (rimozione automatica delle più vecchie).
+Ordine: modifica → versione+STORICO+spec (§2) → `python build_app.py` →
+verifica → `git commit`. Dettaglio tecnico: `spec.md` §11.
+
+## 4. Note operative
+- Gotchas (FMA, Numba, CuPy, Metal, `__constant__`, pinned memory): casa unica
+  `spec.md` §12.
+- GPU condivisa col server LLM locale (llama.cpp): non fermarlo mai.
+  Benchmark rumorosi → workload bounded (n launch fissi, non loop a tempo),
+  confronto a parità di condizioni, meglio A/B alternato nello stesso processo.
+- Clock GPU: dopo pause oltre 10 s (es. render CPU) torna idle e la prima
+  misura è molto più lenta (ordine 10x); scaldare con un burst (es. qualche
+  render 64x64) prima di misurare.
