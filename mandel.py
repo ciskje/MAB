@@ -2905,7 +2905,7 @@ class MandelbrotApp:
                 value=self._ratio_label())
             self.gpu_ratio_menu = tk.OptionMenu(
                 self.gpu_frame, self.gpu_ratio_var,
-                "33% 66%", "40% 60%", "50% 50%", "60% 40%", "66% 33%",
+                "33/66", "40/60", "50/50", "60/40", "66/33",
                 command=self._set_split_ratio)
             self.gpu_ratio_menu.pack(side="left", padx=(4, 0), pady=3)
             self.gpu_ratio_lbl = tk.Label(self.gpu_frame, text=self._ratio_pct())
@@ -2927,14 +2927,13 @@ class MandelbrotApp:
 
     def _ratio_label(self):
         """Label corrente dal _CUDA_SPLIT_RATIO."""
-        r = _CUDA_SPLIT_RATIO
-        p = round(r * 100)
-        return "%d%% %d%%" % (p, 100 - p)
+        p = round(_CUDA_SPLIT_RATIO * 100)
+        return "%d/%d" % (p, 100 - p)
 
     def _set_split_ratio(self, label):
         """Imposta il rapporto split dal dropdown."""
         global _CUDA_SPLIT_RATIO
-        _p = int(label.split("%")[0])
+        _p = int(label.split("/")[0])
         _CUDA_SPLIT_RATIO = _p / 100.0
         self._update_ratio_lbl()
         self._refresh_title()
