@@ -158,7 +158,8 @@ Sotto solo scarti + gotcha API.
   dopo la calibrazione, split e single sulla vista bench devono essere
   bit-identici (`_cuda_split_parity`); in caso di diff lo split si
   auto-disattiva e `Entrambe` viene rifiutata con la % (rapporto + esito
-  in Help > Informazioni, `_cuda_split_diag`).
+  in Help > Informazioni, `_cuda_split_diag`; v6.2.2: pattern-match banda 2
+  vs righe alte del single per distinguere row0-ignorato da banda-mai-scritta).
 - Scalari = array numpy size-1; indice palette preallocato (`_PAL_IDX`);
   `np.asarray` su array CuPy vietato → `.get()`.
 - D2H pinned: `PinnedMemory(size)` + `runtime.memcpy(..., memcpyDeviceToHost)`

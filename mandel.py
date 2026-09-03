@@ -1,11 +1,16 @@
 # ============================================================================
 # Insieme di Mandelbrot - visualizzatore interattivo
-# VERSIONE: 6.2.1
+# VERSIONE: 6.2.2
 # ----------------------------------------------------------------------------
 # REGOLA: ogni modifica incrementa la versione e aggiunge una voce qui sotto
 # (formato: versione - data - descrizione modifiche).
 #
 # STORICO:
+# 6.2.2 - 2026-09-03
+#   - Split CUDA: parity con pattern-match (banda 2 vs righe alte del
+#     single per provare row0-ignorato; quote per-banda; h0 nel report).
+#     Indagine seam: parity 6.2.1 fallita al ~51% = seconda banda
+#     strutturalmente sbagliata, non ULP.
 # 6.2.1 - 2026-09-03
 #   - Split CUDA: prova di parity automatica (split vs single bit-identici
 #     sulla vista bench, dopo la calibrazione). In caso di differenza lo
@@ -815,13 +820,14 @@ BENCH_REF = (
     ("5070 Ti CUDA (storico)", 350.0),
 )
 
-VERSION = "6.2.1"
+VERSION = "6.2.2"
 
 # Ultime 10 modifiche di versione per Help -> "Novità recenti..."
 # (versione, data, descrizione breve). Fonte embedded: i commenti STORICO
 # non sopravvivono alla build PyInstaller, quindi il dialog legge da qui.
 # REGOLA BUMP: aggiungere la voce nuova in testa e tenere max 10.
 HISTORY = (
+    ("6.2.2", "2026-09-03", "Parity split con pattern-match sulla banda 2 (indagine seam)."),
     ("6.2.1", "2026-09-03", "Split CUDA: parity automatica split-vs-single con fail-safe."),
     ("6.2", "2026-09-03", "Split CUDA su 2 GPU con rapporto auto-calibrato (gpu1/gpu2/entrambe)."),
     ("6.1.2", "2026-09-03", "Reset riporta la scala a 1x1."),
@@ -831,7 +837,6 @@ HISTORY = (
     ("5.11.1", "2026-09-03", "Bugfix CUDA: guardia riga nel kernel (no piu' illegal access su NxN grande)."),
     ("5.11.0", "2026-09-03", "Ricalcola unico con scala 1x1/2x2/4x4/8x8 e guardia memoria."),
     ("5.10.2", "2026-09-03", "Preview draft a 1/8 solo su CPU (GPU a 1/4)."),
-    ("5.10.1", "2026-09-03", "Rinomina Foto NxN in Ricalcola NxN."),
 )
 
 # ---------------- Palette (LUT 256x3 condivisa CPU/GPU) ----------------
@@ -1232,6 +1237,7 @@ def _cuda_render_array(dev, cx, cy, half, w, h, mi):
 # v6.2.1: esito parity split-vs-single (None = non ancora misurata).
 _CUDA_SPLIT_PARITY_OK = None
 _CUDA_SPLIT_PARITY_DIFF = 0.0
+_CUDA_SPLIT_PARITY_INFO = ""
 
 def _cuda_split_diag():
     """Riga diagnostica per Help > Informazioni (rapporto + parity)."""
@@ -1247,14 +1253,20 @@ def _cuda_split_diag():
         return base + " (parity in corso...)"
     if _CUDA_SPLIT_PARITY_OK:
         return base + " (parity OK: split bit-identico al single)"
-    return base + (" (parity FALLITA: diff %.1f%%, split auto-disattivato)"
-                   % (_CUDA_SPLIT_PARITY_DIFF * 100.0))
+    return base + (" (parity FALLITA: diff %.1f%%%s, split auto-disattivato)"
+                   % (_CUDA_SPLIT_PARITY_DIFF * 100.0, _CUDA_SPLIT_PARITY_INFO))
+
+def _pixdiff(x, y):
+    """Frazione di pixel con almeno un canale diverso (stessa shape)."""
+    return float((x != y).any(axis=-1).mean())
 
 def _cuda_split_parity():
     """Split e single sulla stessa vista devono essere bit-identici (ogni
-    pixel e' indipendente). Probe 480x270 sulla vista bench: in caso di
+    pixel e' indipendente). Probe 480x270 sulla vista bench + pattern-match
+    sulla banda 2 (distingue row0-ignorato da banda-mai-scritta). In caso di
     differenza lo split si auto-disattiva (fail-safe). Background."""
-    global _CUDA_SPLIT_PARITY_OK, _CUDA_SPLIT_PARITY_DIFF, _CUDA_SPLIT_ON
+    global _CUDA_SPLIT_PARITY_OK, _CUDA_SPLIT_PARITY_DIFF
+    global _CUDA_SPLIT_PARITY_INFO, _CUDA_SPLIT_ON
     devs = _cuda_split_devs()
     if devs is None:
         return
@@ -1262,14 +1274,30 @@ def _cuda_split_parity():
         b = BENCH
         mi = auto_mi(b["half"])
         w, h = 480, 270
+        r = min(0.9, max(0.1, _CUDA_SPLIT_RATIO))
+        h0 = (int(round(h * r)) // 16) * 16
+        h0 = min(max(h0, 16), h - 16)
+        bh1 = h - h0
         a = _compute_gpu_cuda_split_arr(b["cx"], b["cy"], b["half"],
                                         w, h, mi).copy()
         c = _cuda_render_array(devs[0], b["cx"], b["cy"], b["half"],
                                w, h, mi)
         if a.shape != c.shape:
             raise ValueError("shape %s vs %s" % (a.shape, c.shape))
-        diff = float((a != c).any(axis=-1).mean())
+        diff = _pixdiff(a, c)
+        d0 = _pixdiff(a[:h0], c[:h0])
+        d1 = _pixdiff(a[h0:], c[h0:])
+        # La banda 2 coincide con le righe ALTE del single? -> row0 ignorato.
+        d1_top = _pixdiff(a[h0:], c[:bh1])
+        if d1_top == 0.0 and d1 > 0.0:
+            pat = "; banda2 = copia righe alte (row0 ignorato?)"
+        elif d1 > 0.5 and d0 == 0.0:
+            pat = "; banda2 mai scritta? (h0=%d)" % h0
+        else:
+            pat = "; d0=%.1f%% d1=%.1f%% d1vstop=%.1f%% (h0=%d)" % (
+                d0 * 100.0, d1 * 100.0, d1_top * 100.0, h0)
         _CUDA_SPLIT_PARITY_DIFF = diff
+        _CUDA_SPLIT_PARITY_INFO = pat
         _CUDA_SPLIT_PARITY_OK = (diff == 0.0)
         if not _CUDA_SPLIT_PARITY_OK:
             _CUDA_SPLIT_ON = False
@@ -2834,8 +2862,9 @@ class MandelbrotApp:
             if _CUDA_SPLIT_PARITY_OK is False:
                 self._sync_gpu_menu()
                 self.status.config(
-                    text=("split disabilitato: parity fallita (diff %.1f%%) — "
-                          "uso gpu1/gpu2 singole" % (_CUDA_SPLIT_PARITY_DIFF * 100.0)),
+                    text=("split disabilitato: parity fallita (diff %.1f%%%s)"
+                          % (_CUDA_SPLIT_PARITY_DIFF * 100.0,
+                             _CUDA_SPLIT_PARITY_INFO)),
                     foreground=ERR_FG)
                 return
             if set_cuda_split(True):
