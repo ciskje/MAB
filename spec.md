@@ -220,7 +220,8 @@ Sotto solo scarti + gotcha API.
   motore attivo, se > 1) / `Palette:` (check dal registro) / `Precisione:`
   (`f32`/`f64`) / `Iter:` + `Auto`. Seconda riga: label
   `Iterazioni:` / `Iterazioni (auto):`, entry (largh. 7, allineata a destra),
-  `-1000`/`+1000`, `Foto`, `Benchmark`, `Reset`. Poi canvas, poi status bar.
+  `-1000`/`+1000`, `Foto 2x2`, `Foto 4x4`, `Ricalcola`, `Benchmark`, `Reset`.
+  Poi canvas, poi status bar.
   Font `TkDefaultFont/TkTextFont/TkMenuFont` 13 pt.
    Menu File: `Salva immagine... (Ctrl+S)`, `Carica zona...`, `Salva zona`,
    `Salva zona con nome...`, separatore, `Esci`.
@@ -251,8 +252,9 @@ Sotto solo scarti + gotcha API.
    (`VulkanBackend.name`, default ex high-performance).
 - Benchmark: cursore `watch` in `run_benchmark()`, ripristino in
   `_bench_done()` (unico punto di uscita, anche su errore).
-- Foto: ricalcola la vista a 2x per lato (4x pixel) in thread dedicato e
-  mostra la media 2x2 su RGB (`take_photo`/`_photo_worker`/`_photo_done`;
+- Foto (`Foto 2x2`/`Foto 4x4`): ricalcola la vista a NxN per lato (N=2/N=4;
+  4x4 = 16x pixel, molto piu' lento e pesante in memoria) in thread dedicato
+  e mostra la media NxN su RGB (`take_photo(n)`/`_photo_worker`/`_photo_done`;
   box-filter sull'output, unico code-path per tutti i backend dato che la
   GPU colora in-kernel); cursore `watch` durante il calcolo, ripristino in
   `_photo_done()` (unico punto di uscita, anche su errore); all'avvio
@@ -260,7 +262,8 @@ Sotto solo scarti + gotcha API.
   il full-timer ritardato) e il risultato e' scartato se vista, palette,
   motore o precisione cambiano nel frattempo (snapshot esteso, non
   generazione); `self.pil` aggiornata così `Ctrl+S` salva la versione
-  antialiased.
+  antialiased. Una foto alla volta (secondo click: `foto gia' in corso`).
+- Ricalcola: rifa il rendering della vista corrente (`request_render`).
 - Tema: Button/Checkbutton/Radiobutton nativi (mai colorati: su macOS
   degradano a flat illeggibili, lezione 5.4.2); colore solo su Label/Frame:
   status bar e barra accento (3px sopra il canvas) nel colore del motore

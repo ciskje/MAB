@@ -1,11 +1,16 @@
 # ============================================================================
 # Insieme di Mandelbrot - visualizzatore interattivo
-# VERSIONE: 5.9.8
+# VERSIONE: 5.10.0
 # ----------------------------------------------------------------------------
 # REGOLA: ogni modifica incrementa la versione e aggiunge una voce qui sotto
 # (formato: versione - data - descrizione modifiche).
 #
 # STORICO:
+# 5.10.0 - 2026-09-03
+#   - Foto sdoppiata: "Foto 2x2" e "Foto 4x4" (fattore N parametrico in
+#     take_photo/_photo_worker/_photo_done; 4x4 = 16x pixel, molto piu'
+#     lento). Nuovo pulsante "Ricalcola" che rifa il rendering della
+#     vista corrente.
 # 5.9.8 - 2026-09-03
 #   - Zoom-out su macOS: tasti + / - / r legati alla finestra (prima solo
 #     col focus sul canvas, dopo un click in toolbar sembravano morti;
@@ -649,13 +654,14 @@ BENCH_REF = (
     ("5070 Ti CUDA (storico)", 350.0),
 )
 
-VERSION = "5.9.8"
+VERSION = "5.10.0"
 
 # Ultime 10 modifiche di versione per Help -> "Novità recenti..."
 # (versione, data, descrizione breve). Fonte embedded: i commenti STORICO
 # non sopravvivono alla build PyInstaller, quindi il dialog legge da qui.
 # REGOLA BUMP: aggiungere la voce nuova in testa e tenere max 10.
 HISTORY = (
+    ("5.10.0", "2026-09-03", "Foto 2x2 + Foto 4x4 (NxN) e pulsante Ricalcola."),
     ("5.9.8", "2026-09-03", "Zoom-out macOS: tasti globali + click destro x0.5."),
     ("5.9.7", "2026-09-03", "Bugfix Foto: typo nome pulsante, ora funziona."),
     ("5.9.6", "2026-09-03", "Pulsante Foto: vista a 2x con antialiasing (hourglass)."),
@@ -665,7 +671,6 @@ HISTORY = (
     ("5.9.2", "2026-09-03", "Dropdown GPU anche per Vulkan (adapter selezionabile)."),
     ("5.9.1", "2026-09-03", "Benchmark: worker in pausa, hint device; refs su GPU locali."),
     ("5.9.0", "2026-09-03", "Dropdown scelta GPU se > 1 CUDA (persistita in config)."),
-    ("5.8.13", "2026-09-03", "Colore UI: status e accento per motore, errori in rosso."),
 )
 
 # ---------------- Palette (LUT 256x3 condivisa CPU/GPU) ----------------
@@ -2020,8 +2025,14 @@ class MandelbrotApp:
         self.bench_btn.pack(side="right", padx=(16, 8), pady=3)
         self.reset_btn = tk.Button(self.btns, text="Reset", command=self.reset)
         self.reset_btn.pack(side="right", padx=2, pady=3)
-        self.photo_btn = tk.Button(self.btns, text="Foto", command=self.take_photo)
-        self.photo_btn.pack(side="right", padx=2, pady=3)
+        self.recalc_btn = tk.Button(self.btns, text="Ricalcola", command=self.recalc)
+        self.recalc_btn.pack(side="right", padx=2, pady=3)
+        self.photo2_btn = tk.Button(self.btns, text="Foto 2x2",
+                                    command=lambda: self.take_photo(2))
+        self.photo2_btn.pack(side="right", padx=2, pady=3)
+        self.photo4_btn = tk.Button(self.btns, text="Foto 4x4",
+                                    command=lambda: self.take_photo(4))
+        self.photo4_btn.pack(side="right", padx=2, pady=3)
 
     def _build_canvas_status(self):
         # --- barra accento, canvas al centro, status in fondo ---
@@ -2082,9 +2093,11 @@ class MandelbrotApp:
             "Iterazioni: Auto calcola mi dallo zoom; in manuale si imposta il "
             "valore (Invio) o lo si cambia di \u00b11000.\n\n"
             "Palette, file, foto e benchmark: palette dal registro (default fuoco); "
-            "menu File per salvare PNG (Ctrl+S) e zone JSON; Foto ricalcola la "
-            "vista a 2x per lato e la mostra con antialiasing (media 2x2, da non "
-            "toccare durante il calcolo); Benchmark esegue "
+            "menu File per salvare PNG (Ctrl+S) e zone JSON; Foto 2x2 / Foto 4x4 "
+            "ricalcolano la vista a 2x / 4x per lato e la mostrano con "
+            "antialiasing (media 2x2 / 4x4, da non toccare durante il calcolo; "
+            "4x4 = 16x pixel, molto piu' lento); Ricalcola rifa il rendering "
+            "della vista corrente; Benchmark esegue "
             "il test standardizzato di 8 s nella vista corrente."
         )
         tk.Label(body, text=text, wraplength=460, justify="left").pack(anchor="w", pady=(8, 0))
@@ -2552,8 +2565,8 @@ class MandelbrotApp:
             self._bench_done(count, secs, err)
         if self._photo_finished:
             self._photo_finished = False
-            img, view, rt, err = self._photo_result
-            self._photo_done(img, view, rt, err)
+            img, view, n, rt, err = self._photo_result
+            self._photo_done(img, view, n, rt, err)
         self.root.after(30, self._poll)
 
     def _show(self, img, msg, rt=0.0):
@@ -2970,9 +2983,13 @@ class MandelbrotApp:
         self.status.config(text="benchmark completato")
         self._bench_result_dialog(count, secs, err)
 
-    def take_photo(self):
-        # v5.9.6: foto antialiasing: ricalcola la vista corrente a 2x per
-        # lato (4x pixel) e mostra la media 2x2 dei pixel vicini. Eseguita
+    def recalc(self):
+        # v5.10.0: rifa il rendering della vista corrente (preview + full).
+        self.request_render("ricalcolo manuale")
+
+    def take_photo(self, n=2):
+        # v5.9.6: foto antialiasing: ricalcola la vista corrente a NxN per
+        # lato e mostra la media NxN dei pixel vicini. Eseguita
         # in background (come il benchmark): cursore hourglass, UI viva.
         # Per vedere la foto bisogna aspettare senza toccare: se vista,
         # palette, motore o precisione cambiano durante il calcolo, la
@@ -2982,6 +2999,8 @@ class MandelbrotApp:
         # frame al worker) + cancella il full-render ritardato di
         # request_render, altrimenti sovrascriverebbero la foto con la
         # versione non antialiased.
+        # v5.10.0: fattore N parametrico (2 = Foto 2x2, 4 = Foto 4x4):
+        # 4x4 = 16x pixel, molto piu' lento e pesante in memoria.
         if getattr(self, "_photo_running", False):
             self.status.config(text="foto gia' in corso")
             return
@@ -2994,36 +3013,38 @@ class MandelbrotApp:
         self._gen += 1
         _GEN[0] = self._gen
         self._photo_running = True
-        self.photo_btn.config(state="disabled")
+        for b in (self.photo2_btn, self.photo4_btn):
+            b.config(state="disabled")
         self.root.config(cursor="watch")
-        self.status.config(text="foto in corso (antialiasing 2x, non toccare)...")
-        threading.Thread(target=self._photo_worker, args=(view, w, h),
+        self.status.config(text=f"foto in corso (antialiasing {n}x{n}, non toccare)...")
+        threading.Thread(target=self._photo_worker, args=(view, w, h, n),
                          daemon=True).start()
 
-    def _photo_worker(self, view, w, h):
-        # Box-filter 2x2 sullo spazio RGB: unico code-path per tutti i
+    def _photo_worker(self, view, w, h, n):
+        # Box-filter NxN sullo spazio RGB: unico code-path per tutti i
         # backend (la GPU colora in-kernel, nessun it/mag su host).
         # Nessuna cancellazione durante il calcolo (il risultato stantio
         # e' scartato in _photo_done, non qui).
         t0 = time.perf_counter()
         try:
-            big = compute(view[0], view[1], view[2], 2 * w, 2 * h, view[3])
-            if big.size != (2 * w, 2 * h):
-                big = big.resize((2 * w, 2 * h), Image.BILINEAR)
+            big = compute(view[0], view[1], view[2], n * w, n * h, view[3])
+            if big.size != (n * w, n * h):
+                big = big.resize((n * w, n * h), Image.BILINEAR)
             a = np.asarray(big)
-            small = (a.reshape(h, 2, w, 2, 3).mean(axis=(1, 3)) + 0.5).astype(np.uint8)
+            small = (a.reshape(h, n, w, n, 3).mean(axis=(1, 3)) + 0.5).astype(np.uint8)
             img = Image.fromarray(small, "RGB")
-            self._photo_result = (img, view, time.perf_counter() - t0, None)
+            self._photo_result = (img, view, n, time.perf_counter() - t0, None)
         except Exception as ex:
-            self._photo_result = (None, view, 0.0, str(ex))
+            self._photo_result = (None, view, n, 0.0, str(ex))
         self._photo_finished = True
 
-    def _photo_done(self, img, view, rt, err):
+    def _photo_done(self, img, view, n, rt, err):
         # Unico punto di uscita (anche in errore): ripristina sempre
-        # cursore e pulsante, come _bench_done.
+        # cursore e pulsanti, come _bench_done.
         self._photo_result = None
         self._photo_running = False
-        self.photo_btn.config(state="normal")
+        for b in (self.photo2_btn, self.photo4_btn):
+            b.config(state="normal")
         self.root.config(cursor="")
         if err:
             self.status.config(text=f"foto fallita: {err}")
@@ -3031,7 +3052,7 @@ class MandelbrotApp:
                 _PALETTE, _ACTIVE, _PREC) != view:
             self.status.config(text="foto scartata (vista cambiata)")
         else:
-            self._show(img, "foto antialiasing 2x", rt)
+            self._show(img, f"foto antialiasing {n}x{n}", rt)
 
 
 def main():
