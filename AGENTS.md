@@ -5,9 +5,11 @@ Git traccia solo i sorgenti; tutto il resto è generato o dato utente.
 
 | file | ruolo |
 |---|---|
-| `mandelbrot/` | il programma (pacchetto: `config`/`palette`/`state`/`mem`/`cpu`/`cuda`/`metal`/`vulkan`/`engine`/`app`; Tkinter + 4 backend con fallback CPU). Fonte di verità per versione (`__init__.py`: `VERSION` + `HISTORY` ultime 10) |
+| `mandelbrot/` | il programma (pacchetto: `config`/`palette`/`state`/`mem`/`cpu`/`cuda`/`metal`/`vulkan`/`engine`/`app`/`expert`; Tkinter + 4 backend con fallback CPU). Fonte di verità per versione (`__init__.py`: `VERSION` + `HISTORY` ultime 10) |
 | `mandel.py` | shim entry-point (re-export + `main()`); tiene l'header `# VERSIONE` letto da `mandelbrot.spec`/`build_app.py` e la compat `import mandel` di `make_icon.py` |
 | `spec.md` | specifica; resta in sync col sorgente (regola §2) |
+| `README.md` | pagina GitHub (titolo con versione, Download da Release) + `demo.png` |
+| `LICENSE` | MIT |
 | `build_app.py` | unico script di build (icona → PyInstaller → post); dettaglio in `spec.md` §11 |
 | `mandelbrot.spec` | ricetta PyInstaller multipiattaforma |
 | `hook_dlldir.py` | runtime hook Windows (`os.add_dll_directory` su EXE + `_internal`) |
@@ -32,11 +34,11 @@ Ogni modifica bumper DEVE:
 3. Aggiornare `spec.md` al nuovo stato (sempre in sincronia).
 
 ## 3. Build dell'app (multipiattaforma)
-Principio: l'agente non builda mai in automatico; builda solo con
-`python build_app.py` su richiesta esplicita dell'utente. Mai buildare di
-iniziativa, nemmeno prima di un commit: se il sorgente avanza senza build,
-l'artefatto su filesystem resta semplicemente indietro (è normale).
-L'artefatto non va mai committato (`dist/` è gitignorato).
+Mai di iniziativa, nemmeno prima di un commit (l'artefatto indietro è
+normale): solo con `python build_app.py` su richiesta esplicita, fuori
+dall'ordine automatico. Ordine: modifica → versione+STORICO+spec (§2) →
+verifica. Commit e push su GitHub SOLO su richiesta esplicita, mai in
+automatico (istruzione permanente: niente commit/push di iniziativa).
 
 | piattaforma | app (disco di sistema, temp) | distributivo (progetto/NAS, `dist/`) |
 |---|---|---|
@@ -47,15 +49,15 @@ Note: intermedie (`mandelbrot_build`) e app stanno in temp utente (il progetto
 può stare su share lenta); Vulkan bundled out-of-the-box, CUDA richiede
 driver + runtime utente (cuda-pathfinder); ritenzione `KEEP_N = 3` versioni
 per piattaforma in `dist/` (rimozione automatica delle più vecchie).
-Ordine: modifica → versione+STORICO+spec (§2) → verifica.
-Commit e push su GitHub SOLO su richiesta esplicita dell'utente, mai in
-automatico (istruzione permanente: niente commit/push di iniziativa).
-La build con `python build_app.py` avviene solo su richiesta esplicita,
-fuori dall'ordine automatico.
 README per le release (istruzione permanente): a ogni bump di versione
 aggiornare in `README.md` il numero nel titolo e, se si pubblica una
 Release, i link della sezione Download
 (`.../releases/download/<tag>/<file>` per piattaforma).
+Su "builda" (istruzione permanente), in quest'ordine: prima commit dei
+sorgenti pendenti (così la Release corrisponde sempre a un commit
+esistente), poi `python build_app.py` + smoke EXE, poi aggiornamento
+Release GitHub (sostituire l'asset con lo zip fresco) e allineamento
+`README.md` (numero titolo + link Download, secondo commit).
 Dettaglio tecnico: `spec.md` §11.
 
 ## 4. Note operative
