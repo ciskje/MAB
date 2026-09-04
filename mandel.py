@@ -1,12 +1,15 @@
 # ============================================================================
 # Insieme di Mandelbrot - visualizzatore interattivo
-# VERSIONE: 7.0.0
+# VERSIONE: 7.0.1
 # ----------------------------------------------------------------------------
 # Shim di compatibilita': il programma vive nel pacchetto mandelbrot/
 # (config/palette/state/mem/cuda/metal/vulkan/cpu/engine/app).
 # STORICO completo: git log --oneline. Ultime 10 voci in mandelbrot/__init__.py
 # (HISTORY, letta da Help -> Novita` recenti...).
 #
+# 7.0.1 - 2026-09-04
+#   - Fix split: import mancanti (struct in vulkan/metal, time+BENCH/auto_mi
+#     in cuda, _fmt_lut in metal); Vulkan rende di nuovo.
 # 7.0.0 - 2026-09-04
 #   - Split in pacchetto mandelbrot/ (ex single-file da 3774 righe);
 #     matematica e kernel invariati (CPU/CUDA bit-identici, verificato).

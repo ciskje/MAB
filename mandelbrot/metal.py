@@ -1,9 +1,11 @@
 """Backend Metal (pyobjc, f32-only)."""
+import struct
 import threading
 import numpy as np
 from PIL import Image
 from . import state as S
 from .palette import PALETTES, make_lut
+from .cuda import _fmt_lut
 
 def _build_metal_msl():
     names = list(PALETTES)

@@ -1,10 +1,11 @@
-"""Mandelbrot v7.0.0 - pacchetto (ex mandel.py single-file).
+"""Mandelbrot v7.0.1 - pacchetto (ex mandel.py single-file).
 STORICO completo: `git log --oneline`. Qui solo le ultime 10 voci
 (lette da Help -> Novita` recenti...).
 """
-VERSION = "7.0.0"
+VERSION = "7.0.1"
 
 HISTORY = (
+    ("7.0.1", "2026-09-04", "Fix split: import mancanti (struct in vulkan/metal, time+BENCH/auto_mi in cuda, _fmt_lut in metal); Vulkan rende di nuovo."),
     ("7.0.0", "2026-09-04", "Split in pacchetto mandelbrot/ (config/palette/state/mem/cuda/metal/vulkan/cpu/engine/app); shim mandel.py compat; indice palette cacheato."),
     ("6.2.5", "2026-09-03", "Split: calibrazione on-demand, dropdown ratio fisso, label corrente, 2a riga."),
     ("6.2.4", "2026-09-03", "Benchmark usa lo split (Entrambe) quando attivo, come il render."),
@@ -14,7 +15,6 @@ HISTORY = (
     ("6.2", "2026-09-03", "Split CUDA su 2 GPU con rapporto auto-calibrato (gpu1/gpu2/entrambe)."),
     ("6.1.2", "2026-09-03", "Reset riporta la scala a 1x1."),
     ("6.1.1", "2026-09-03", "Benchmark in esclusiva GPU anche vs ricalcolo NxN (conteggi stabili)."),
-    ("6.1", "2026-09-03", "Ricalcolo NxN: memoria misurata davvero (VRAM/RAM), via tetto statico."),
 )
 
 # Compat: make_icon.py e vecchi `import mandel` usano questi nomi.

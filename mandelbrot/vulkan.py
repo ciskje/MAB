@@ -1,4 +1,5 @@
 """Backend Vulkan (wgpu, f32-only) + selezione adapter."""
+import struct
 import threading
 import numpy as np
 from PIL import Image

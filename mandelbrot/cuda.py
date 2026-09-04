@@ -1,9 +1,11 @@
 """Backend CUDA (CuPy RawKernel) + split multi-GPU + parity."""
 import threading
+import time
 import ctypes
 import numpy as np
 from PIL import Image
 from . import state as S
+from .config import BENCH, auto_mi
 from .palette import PALETTES, make_lut
 
 def _cuda_free_bytes(dev=None):

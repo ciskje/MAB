@@ -1,7 +1,7 @@
 # Visualizzatore Mandelbrot — spec di ricreazione
 
 Descrizione concisa ma sufficiente perché un altro LLM (o sviluppatore) ricrei il
-programma da zero. Riferimento: `mandel.py` (un solo file).
+programma da zero. Riferimento: pacchetto `mandelbrot/` + shim `mandel.py`.
 Ogni modifica al sorgente DEVE aggiornare anche questa spec (vedi `AGENTS.md`).
 
 Convenzioni: `cpu|cuda|metal|vulkan` = valori di `_ACTIVE`; `Cpu/Cuda/...`
@@ -24,7 +24,9 @@ build → gotchas (§12.1–§12.6).
   `cpu`/`cuda`/`metal`/`vulkan` (backend), `engine` (dispatch `compute()` +
   warmup), `app` (`MandelbrotApp` + `main`). I moduli leggono/scrivono lo
   stato come `S.NOME` (`from . import state as S`); `mem` importa `cuda` lazy
-  dentro la funzione (niente cicli import).
+  dentro la funzione (niente cicli import); `metal` riusa `_fmt_lut` da `cuda`.
+  (v7.0.1: audit post-split degli import — ogni `NameError` uccideva il worker
+  al primo frame del backend corrispondente, con UI apparentemente bloccata.)
   Backend non disponibili restano visibili in toolbar ma disabilitati (grigi).
 - Render su thread worker, UI mai bloccata (§7).
 - Metodi di `MandelbrotApp` (in `mandelbrot/app.py`) raggruppati per funzione:
@@ -391,7 +393,8 @@ CUDA (solo per CUDA; Vulkan bundled).
 - Ritenzione: `KEEP_N = 3` versioni per piattaforma in `dist/` (zip e dmg
   separatamente; rimozione automatica delle più vecchie per numero di
   versione, anche a 2 parti es. `v6.0`).
-- Icona `make_icon.py`: render 1024x1024 (CPU f64, `termal`, `mi = 800`) →
+- Icona `make_icon.py`: render 1024x1024 (CPU f64, `termal`, `mi = 800`,
+  via `mandelbrot.cpu` dallo shim `mandel`) →
   `icon_src.png` + `mandelbrot.ico` (16,24,32,48,64,128,256) + su macOS
   `mandelbrot.icns` via Pillow. Versione distributivi dall'header `# VERSIONE`
   (§1). Processo/ritenzione/gitignore: vedi `AGENTS.md`.
