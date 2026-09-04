@@ -1,8 +1,22 @@
 # Insieme di Mandelbrot — visualizzatore interattivo
 
+Versione **7.1.3**
+
 Visualizzatore interattivo dell'insieme di Mandelbrot (Python + Tkinter)
 con 4 backend di rendering selezionabili a runtime e fallback automatico
 sulla CPU.
+
+![Demo (palette termal, antialias 2x2)](demo.png)
+
+## Motivazioni
+
+Il progetto nasce per confrontare dal vero CPU e GPU sullo stesso calcolo
+(escape-time con interior analitico e coloring smooth identici su tutti i
+backend, a meno di 1–2 ULP): quanto rende Numba contro CuPy, Metal e Vulkan
+sulla stessa immagine, e dove la precisione f32 inizia a divergere nei
+deep-zoom. In più è un banco di prova per lo sviluppo assistito da AI
+locale (vedi sotto): specifica e codice evolvono insieme, ogni versione è
+verificata bit-identica prima del commit.
 
 ![Python](https://img.shields.io/badge/python-3.14-blue)
 ![Licenza](https://img.shields.io/badge/licenza-vedi_riga_sotto-lightgrey)
@@ -49,6 +63,15 @@ python build_app.py
 Produce l'app self-contained (Windows: EXE + zip in `dist/`; macOS: .app
 firmata ad-hoc + .dmg). Dettagli in `spec.md` §11.
 
+## Benchmark per LLM
+
+Il progetto è sviluppato anche e soprattutto con una AI locale (Qwen3.8
+27B). `spec.md` (specifica tecnica sempre in sync col sorgente) e
+`AGENTS.md` (convenzioni di lavoro: versionamento, build, note operative)
+sono tenuti aggiornati proprio per questo: dati in pasto a una LLM,
+permettono di testarne le capacità agentiche e di programmazione su un
+progetto reale (refactor, bugfix verificati, bump di versione disciplinati).
+
 ## Struttura
 
 | file | ruolo |
@@ -59,5 +82,6 @@ firmata ad-hoc + .dmg). Dettagli in `spec.md` §11.
 | `build_app.py` / `mandelbrot.spec` / `hook_dlldir.py` | build PyInstaller |
 | `make_icon.py` | genera l'icona dell'app dal motore CPU |
 
-Versione corrente: vedi `VERSION` in `mandelbrot/__init__.py`
-(storico completo con `git log --oneline`).
+Versione corrente: **7.1.3** (aggiornata a ogni release; fonte di verità:
+`VERSION` in `mandelbrot/__init__.py`, storico completo con
+`git log --oneline`).
