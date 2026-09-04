@@ -357,9 +357,13 @@ Sotto solo scarti + gotcha API.
    FALLITO lo segnala con hint (riprovare o riavviare).
 - Report: dialog con `rendering/s` grande (42 pt, `#2ea44f`), statistiche
   (n. rendering, ms/render; in esperta `migliore di 3 prove da 8 s`), codice
-  di sicurezza a 64 bit (16 hex in gruppi da 4, Consolas 14 bold), grafico +
+  di sicurezza a 64 bit (16 hex in gruppi da 4, Entry copiabile + pulsante
+  `Copia`), grafico +
   griglia parametri (riga `Hardware` da `hw_name()` + riga `Modalità`);
   errore → `BENCHMARK FALLITO` + dettaglio (`#e5534b`).
+- Valori bench in `config.json` clampati al load (`_load_bench`: secs 1–120,
+  w/h 64–7680, half 1e-12–2, cx/cy ±2; malformato → default): niente piu'
+  benchmark accorciati da valori spuri.
 - Codice di sicurezza (v7.1.0, `mandelbrot/expert.py`, tamper-evident NON
   anti-forgery: app open-source/offline, chi ricalcola il codice col
   programma modificato non e' rilevabile; il ritocco dello screenshot si'):

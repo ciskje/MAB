@@ -1085,14 +1085,31 @@ class MandelbrotApp:
     def _load_bench(self, b):
         if not isinstance(b, dict):
             return
+        # v7.1.1: clamp di robustezza (un valore spurio in config — es. secs
+        # scritto da una sessione di test — non deve piu' accorciare o
+        # rompere il benchmark; ogni campo malformato ricade sul default).
+        def _f(key, lo, hi):
+            try:
+                v = float(b.get(key, BENCH[key]))
+            except (TypeError, ValueError):
+                return BENCH[key]
+            if not math.isfinite(v):
+                return BENCH[key]
+            return min(hi, max(lo, v))
+        def _i(key, lo, hi):
+            try:
+                v = int(b.get(key, BENCH[key]))
+            except (TypeError, ValueError):
+                return BENCH[key]
+            return min(hi, max(lo, v))
         self.bench = dict(BENCH)
-        self.bench["cx"] = float(b.get("cx", BENCH["cx"]))
-        self.bench["cy"] = float(b.get("cy", BENCH["cy"]))
-        self.bench["half"] = float(b.get("half", BENCH["half"]))
+        self.bench["cx"] = _f("cx", -2.0, 2.0)
+        self.bench["cy"] = _f("cy", -2.0, 2.0)
+        self.bench["half"] = _f("half", 1e-12, 2.0)
         # 'mi' non si carica piu': e' derivato da auto_mi(bench['half'])
-        self.bench["w"] = int(b.get("w", BENCH["w"]))
-        self.bench["h"] = int(b.get("h", BENCH["h"]))
-        self.bench["secs"] = float(b.get("secs", BENCH["secs"]))
+        self.bench["w"] = _i("w", 64, 7680)
+        self.bench["h"] = _i("h", 64, 7680)
+        self.bench["secs"] = _f("secs", 1.0, 120.0)
 
     def _flush_config(self):
         if self._cfg_dirty:
@@ -1266,13 +1283,30 @@ class MandelbrotApp:
                          font=("Segoe UI", 11, "italic")).pack(pady=(0, 8))
             # v7.1.0: codice di sicurezza (tamper-evident): lega rps +
             # hardware + resto dei campi; verificabile in Help > Verifica.
+            # v7.1.2: campo copiabile (Entry readonly + pulsante Copia).
             b = self.bench
             code = make_code(count / secs, hw_name(), backend(), S._PREC,
                              VERSION, auto_mi(b["half"]), b["secs"])
             tk.Label(body, text="Codice di sicurezza:",
                      ).pack(anchor="w", pady=(0, 2))
-            tk.Label(body, text=fmt_code(code),
-                     font=("Consolas", 14, "bold")).pack(anchor="w", pady=(0, 16))
+            crow = tk.Frame(body)
+            crow.pack(anchor="w", pady=(0, 16))
+            code_entry = tk.Entry(crow, font=("Consolas", 14, "bold"), width=19,
+                                  readonlybackground=body.cget("bg"))
+            code_entry.insert(0, fmt_code(code))
+            code_entry.config(state="readonly")
+            code_entry.pack(side="left")
+            code_entry.bind("<Button-1>", lambda e: (
+                code_entry.select_range(0, "end"), code_entry.icursor("end")))
+            copied = tk.Label(crow, text="", font=("Segoe UI", 10),
+                              foreground="#2ea44f")
+            def copia():
+                win.clipboard_clear()
+                win.clipboard_append(fmt_code(code))
+                copied.config(text="copiato!")
+            tk.Button(crow, text="Copia", command=copia).pack(side="left",
+                                                              padx=(10, 0))
+            copied.pack(side="left", padx=(8, 0))
             tk.Label(body, text="Confronto coi riferimenti storici (rendering/s):",
                      ).pack(anchor="w", pady=(0, 4))
             self._bench_chart(body, count / secs).pack(anchor="w", pady=(2, 14))

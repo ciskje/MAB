@@ -1,10 +1,11 @@
-"""Mandelbrot v7.1.0 - pacchetto (ex mandel.py single-file).
+"""Mandelbrot v7.1.1 - pacchetto (ex mandel.py single-file).
 STORICO completo: `git log --oneline`. Qui solo le ultime 10 voci
 (lette da Help -> Novita` recenti...).
 """
-VERSION = "7.1.0"
+VERSION = "7.1.1"
 
 HISTORY = (
+    ("7.1.1", "2026-09-04", "Codice sicurezza copiabile (Entry + Copia); clamp valori bench in config (secs/w/h/half sempre sani)."),
     ("7.1.0", "2026-09-04", "Benchmark Esperto (3x8 s, vale la migliore) + codice di sicurezza a 64 bit + Help Verifica benchmark."),
     ("7.0.1", "2026-09-04", "Fix split: import mancanti (struct in vulkan/metal, time+BENCH/auto_mi in cuda, _fmt_lut in metal); Vulkan rende di nuovo."),
     ("7.0.0", "2026-09-04", "Split in pacchetto mandelbrot/ (config/palette/state/mem/cuda/metal/vulkan/cpu/engine/app); shim mandel.py compat; indice palette cacheato."),
