@@ -10,6 +10,16 @@ bit-identico prima di ogni commit (vedi sotto).
 
 ![Demo (palette termal, antialias 2x2)](demo.png)
 
+## Download
+
+| Piattaforma | File |
+|---|---|
+| Windows 64-bit (v7.1.3) | [Mandelbrot-v7.1.3-win64.zip](https://github.com/ciskje/MandelbrotTest/releases/download/v7.1.3/Mandelbrot-v7.1.3-win64.zip) |
+| macOS (v5.10.2) | [Mandelbrot-v5.10.2-macos.dmg](https://github.com/ciskje/MandelbrotTest/releases/download/v5.10.2/Mandelbrot-v5.10.2-macos.dmg) |
+
+Vulkan incluso ovunque; CUDA richiede driver NVIDIA + runtime utente.
+Altre versioni nella pagina [Releases](https://github.com/ciskje/MandelbrotTest/releases).
+
 ## Motivazioni
 
 Il progetto nasce per confrontare dal vero CPU e GPU sullo stesso calcolo
