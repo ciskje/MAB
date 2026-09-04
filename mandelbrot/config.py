@@ -25,8 +25,25 @@ PHOTO_BACKSTOP_MPX = 128.0  # rete di sicurezza SOLO se la memoria libera
 # non e' determinabile (query OS/driver fallita): oltre si rifiuta comunque.
 
 # --- Percorsi e parametri ---
-# Config salvata/caricata a ogni esecuzione (vista + tutti i settaggi)
-CONFIG_PATH = os.path.join(os.path.expanduser("~"), "mandelbrot", "config.json")
+# Config salvata/caricata a ogni esecuzione (vista + tutti i settaggi).
+# v7.3.0: cartella nascosta .mandelbrot (prima mandelbrot/).
+CONFIG_PATH = os.path.join(os.path.expanduser("~"), ".mandelbrot", "config.json")
+
+def _migrate_config():
+    # v7.3.0: migrazione one-shot della vecchia posizione: se la nuova
+    # config non esiste e la vecchia si, la porto nella cartella nuova
+    # (niente settaggi persi all'upgrade). La vecchia cartella resta
+    # intatta (mai dati utente cancellati). Silenziosa.
+    old = os.path.join(os.path.expanduser("~"), "mandelbrot", "config.json")
+    if not os.path.exists(CONFIG_PATH) and os.path.exists(old):
+        try:
+            os.makedirs(os.path.dirname(CONFIG_PATH), exist_ok=True)
+            import shutil
+            shutil.copy2(old, CONFIG_PATH)
+        except OSError:
+            pass
+
+_migrate_config()
 
 # Benchmark: regione + parametri. Default = regione fornita dall'utente;
 # i valori sono persistiti in config.json (overridibili).

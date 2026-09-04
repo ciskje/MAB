@@ -345,7 +345,7 @@ Sotto solo scarti + gotcha API.
 | file | path | chiavi | note |
 |---|---|---|---|
 | zona (JSON indentato) | a scelta, default `mandelbrot_AAAAMMGG_HHMMSS.json` | `app, versione, cx, cy, half, mi, mi_auto` | `Carica` ripristina vista+MI (clamp `half`), rende file corrente (titolo). `Salva zona` voce disabilitata se nessun file corrente; `save_zone()` senza file ricade su `save_as`. PNG usa stesso pattern nome |
-| config | `~/mandelbrot/config.json` | `precision, palette, backend, cuda_device, cuda_split, cuda_split_ratio, vulkan_adapter, bench` | vista e `view_file` mai persistiti (vecchi valori ignorati); backend legacy `"gpu"` → default, ignoto → default; `cuda_device`/`vulkan_adapter` clampati al range (default 0), `cuda_split_ratio` clampato 0.1–0.9 (default 0.5); salvataggio all'uscita + throttle 1 s (`after(1000)`; `request_render` marca dirty anche per sola vista) |
+| config | `~/.mandelbrot/config.json` (v7.3.0; prima `~/mandelbrot/`) | `precision, palette, backend, cuda_device, cuda_split, cuda_split_ratio, vulkan_adapter, bench` | vista e `view_file` mai persistiti (vecchi valori ignorati); backend legacy `"gpu"` → default, ignoto → default; `cuda_device`/`vulkan_adapter` clampati al range (default 0), `cuda_split_ratio` clampato 0.1–0.9 (default 0.5); salvataggio all'uscita + throttle 1 s (`after(1000)`; `request_render` marca dirty anche per sola vista); v7.3.0: migrazione one-shot — se la nuova config non esiste e la vecchia sì, `config.json` viene copiata in `~/.mandelbrot/` (vecchia cartella non toccata, silenziosa) |
 
 - Avvio sempre da default (insieme intero + MI auto); vista precedente solo via
   `Carica zona...`.
@@ -388,7 +388,8 @@ Sotto solo scarti + gotcha API.
      davvero lento; 180 s distingue 'lento' da 'bloccato'). Sforato ->
      errore, bench FALLITO col dettaglio.
   3. Diagnosi: ogni fallimento (pre-warmup, misura, 0 rendering) appende
-     in `~/mandelbrot/bench.log` (troncato a ~200 righe) timestamp,
+     nella cartella config (`~/.mandelbrot/bench.log` da v7.3.0; prima
+     `~/mandelbrot/`), troncato a ~200 righe, con timestamp,
      versione, motore+precisione, hw, OS, Python, stato Numba, parametri
      bench e traceback. Silenzioso: un errore nel log non rompe il bench.
   4. `Help > Informazioni` mostra la riga `OS: <platform.platform()>`
