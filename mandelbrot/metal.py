@@ -1,11 +1,13 @@
 """Backend Metal (pyobjc, f32-only)."""
 import struct
 import threading
+import time
 import numpy as np
 from PIL import Image
 from . import state as S
 from .palette import PALETTES, make_lut
 from .cuda import _fmt_lut
+from .config import METAL_TIMEOUT_S
 
 def _build_metal_msl():
     names = list(PALETTES)
@@ -90,7 +92,8 @@ class MetalBackend:
     I parametri (cx, cy, half, w, h, mi, pal) vanno in uno struct passato via
     buffer [[buffer(1)]]; l'output e' un buffer [[buffer(0)]]. H2D/D2H via
     buf.contents().as_buffer(N) (memoryview scrivibile, C-level). Un lock
-    serializza le chiamate (il compute e' sincrono: commit+waitUntilCompleted+read).
+    serializza le chiamate (il compute e' sincrono: commit+attesa con
+    deadline METAL_TIMEOUT_S+read, v7.2.1).
     """
     TH = 16  # threads per threadgroup (16x16 = 256, sotto il max 1024 di M1)
 
@@ -137,8 +140,23 @@ class MetalBackend:
             enc.dispatchThreadgroups_threadsPerThreadgroup_(
                 M.MTLSizeMake(gx, gy, 1), M.MTLSizeMake(self.TH, self.TH, 1))
             enc.endEncoding()
+            # v7.2.1: deadline al posto di waitUntilCompleted() bloccante:
+            # una GPU/driver impallassi (es. HW non collaudato) deve dare un
+            # errore chiaro, non un hang infinito del benchmark.
+            # Il completed handler scatta su OGNI stato terminale (ok e
+            # errore); NON confrontiamo i valori di status() grezzi:
+            # l'enum cambia tra versioni macOS (es. Completed = 4 su
+            # macOS 26, 5 su versioni precedenti).
+            ev = threading.Event()
+            cmd.addCompletedHandler_(lambda cb: ev.set())
             cmd.commit()
-            cmd.waitUntilCompleted()
+            if not ev.wait(timeout=METAL_TIMEOUT_S):
+                raise RuntimeError(
+                    "Metal: rendering non completato entro %d s "
+                    "(GPU bloccata?)" % METAL_TIMEOUT_S)
+            r = cmd.error()
+            if r is not None:
+                raise RuntimeError("Metal: command buffer fallita: %s" % r)
             mv = out.contents().as_buffer(need)
             return np.frombuffer(mv, dtype=np.uint8, count=need).reshape(h, w, 3).copy()
 S._METAL_OK = False

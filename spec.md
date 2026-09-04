@@ -193,8 +193,14 @@ Sotto solo scarti + gotcha API.
 - Deterministico (2 run bit-identici). Misurato 12–30x la CPU su M1.
 - Gotcha: `fmin/fmax/pow/sqrt/log2/log` (senza `f`); `half` è tipo riservato →
   campo `hs`; puntatori con address space esplicito (`device`/`constant`);
-  `setBuffer:offset:atIndex:` = `(buffer, offset, index)` → `(pbuf, 0, 1)`;
-  compute sincrono (`commit` + `waitUntilCompleted` + read) + `Lock`.
+   `setBuffer:offset:atIndex:` = `(buffer, offset, index)` → `(pbuf, 0, 1)`;
+   compute sincrono (`commit` + attesa + read) + `Lock`; attesa = completed
+   handler + `threading.Event` con deadline `METAL_TIMEOUT_S = 30` s
+   (v7.2.1, prima `waitUntilCompleted()` bloccante: una GPU impallassi dava
+   hang infinito); fallimento → `cmd.error()` nel dettaglio →
+   `RuntimeError`. Gotcha (v7.2.1): i valori grezzi di `status()` NON sono
+   confrontabili — l'enum cambia tra versioni macOS (su macOS 26
+   `Completed = 4`, su versioni precedenti `5`): mai `if st == 5`.
 
 ### 6.4 Vulkan (wgpu 0.32, f32-only)
 - Shader WGSL `main`, workgroup 16x16 (256), dispatch
@@ -367,8 +373,26 @@ Sotto solo scarti + gotcha API.
   Pre-warmup boundato (<=50 rendering e <=0.7 s) PRIMA della prima finestra
   di misura: clock GPU, buffer pinned, kernel esatto — tutti fuori dalla
   misura. Le barre "storico" GPU (BENCH_REF) sono rimesurate col metodo 4x
-  (v7.2.0: 415.0 / 306.5 / 188.5 / 134.0) e confrontabili con le nuove run;
-  la barra CPU resta una misura diretta (la CPU non usa la diluizione).
+   (v7.2.0: 415.0 / 306.5 / 188.5 / 134.0) e confrontabili con le nuove run;
+   la barra CPU resta una misura diretta (la CPU non usa la diluizione).
+- Timeout (v7.2.1): niente hang infinito del benchmark.
+  1. Metal: `waitUntilCompleted()` bloccante sostituito da completed
+     handler + `threading.Event` con deadline `METAL_TIMEOUT_S = 30` s per
+     rendering (un render GPU sano dura <1 s); scaduto -> `RuntimeError`
+     chiaro ("GPU bloccata?"); buffer fallita -> dettaglio `cmd.error()`.
+     (I valori grezzi di `status()` non sono usati: l'enum varia tra versioni
+     macOS, veda §6.3.)
+  2. App: deadline per-rendering `render_dl()` nel `_bench_worker`
+     (pre-warmup E finestra di misura): Metal `METAL_TIMEOUT_S + 5 = 35` s,
+     CPU `BENCH_RENDER_LIMIT_S = 180` s (single-core numpy puo' essere
+     davvero lento; 180 s distingue 'lento' da 'bloccato'). Sforato ->
+     errore, bench FALLITO col dettaglio.
+  3. Diagnosi: ogni fallimento (pre-warmup, misura, 0 rendering) appende
+     in `~/mandelbrot/bench.log` (troncato a ~200 righe) timestamp,
+     versione, motore+precisione, hw, OS, Python, stato Numba, parametri
+     bench e traceback. Silenzioso: un errore nel log non rompe il bench.
+  4. `Help > Informazioni` mostra la riga `OS: <platform.platform()>`
+     (facilita i report su hardware non collaudato, es. M5).
 - Esegue nel modo corrente (motore + f32/f64 di toolbar, GPU/adapter
   selezionato) ma SEMPRE 1x1 fisso (960x540 da config, mai NxN: la scala
   persistente non tocca il bench; su GPU 2x per lato, vedi Metodo sopra);

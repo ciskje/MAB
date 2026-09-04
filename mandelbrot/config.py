@@ -41,6 +41,13 @@ BENCH = dict(cx=-0.7499302568795561, cy=-0.015139113925433963, half=5.2267371559
 # La CPU resta 1x (a 4x area sarebbe troppo lenta).
 BENCH_GPU_SCALE = 2
 
+# v7.2.1: timeout di sicurezza (niente hang infinito del benchmark).
+# Metal: un render GPU sano dura <1 s; 30 s copre anche GPU molto lente.
+# CPU: single-core numpy su 960x540 @ ~11k iterazioni puo' richiedere
+# decine di secondi; 180 s distingue 'lento' da 'bloccato'.
+METAL_TIMEOUT_S = 30
+BENCH_RENDER_LIMIT_S = 180
+
 # Riferimenti storici per il grafico a barre del benchmark (rendering/s,
 # stessa regione/parametri): evidenziano il salto CPU->GPU su macchine note.
 BENCH_REF = (

@@ -1,4 +1,4 @@
-# MAB - Mandelbrot Ai benchmark per LLM agentica — v7.2.0
+# MAB - Mandelbrot Ai benchmark per LLM agentica — v7.2.1
 
 Questo repo è un **benchmark per testare le capacità agentiche e di
 programmazione di una LLM** su un progetto software reale e vivo: un

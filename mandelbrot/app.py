@@ -18,7 +18,8 @@ from . import VERSION, HISTORY
 from .config import (INIT_W, INIT_H, CX0, CY0, HALF0, MI0, MI_AUTO_BASE,
     MI_AUTO_MIN, MI_AUTO_MAX, MIN_HALF, MIN_DIM, PHOTO_HEADROOM,
     PHOTO_HOST_RESERVE, PHOTO_BACKSTOP_MPX, CONFIG_PATH, BENCH, BENCH_REF,
-    BENCH_GPU_SCALE, BACKEND_FG, ERR_FG, auto_mi)
+    BENCH_GPU_SCALE, METAL_TIMEOUT_S, BENCH_RENDER_LIMIT_S, BACKEND_FG, ERR_FG,
+    auto_mi)
 from .palette import PALETTES
 from .state import apply_palette
 from .mem import _photo_mem_ok
@@ -281,6 +282,9 @@ class MandelbrotApp:
                  foreground=_backend_fg()).pack(anchor="w")
         tk.Label(body, text=f"Versione {VERSION}").pack(anchor="w", pady=(6, 0))
         tk.Label(body, text=f"{backend()} ({hw_name()})").pack(anchor="w")
+        # v7.2.1: riga OS (facilita i report su hardware non collaudati).
+        import platform
+        tk.Label(body, text="OS: %s" % platform.platform()).pack(anchor="w")
         tk.Label(body, text="Autore: Francesco Ferrara").pack(anchor="w", pady=(10, 0))
         tk.Label(body, text="Email: occhiobello@gmail.com").pack(anchor="w")
         # v5.9.5: diagnostica CPU/Numba (perche' single-core?).
@@ -1460,6 +1464,22 @@ class MandelbrotApp:
         def render():
             return compute(b["cx"], b["cy"], b["half"], bw, bh, mi,
                            buf=bench_buf)
+        # v7.2.1: deadline PER RENDERING (pre-warmup e finestra di misura):
+        # un singolo render bloccato deve dare un errore, non un hang
+        # infinito del benchmark (niente da fare col cap di 0.7 s / b['secs']
+        # se il blocco e' DENTRO un render). Metal ha gia' il proprio timeout
+        # (METAL_TIMEOUT_S, qui +5 s di margine); CPU: single-core numpy
+        # puo' essere davvero lento -> limite generoso.
+        rlimit = (METAL_TIMEOUT_S + 5) if S._ACTIVE == "metal" \
+            else BENCH_RENDER_LIMIT_S
+        def render_dl():
+            t0 = time.perf_counter()
+            r = render()
+            if time.perf_counter() - t0 > rlimit:
+                raise RuntimeError(
+                    "rendering singolo oltre %d s (GPU/CPU bloccata?)"
+                    % rlimit)
+            return r
         # v7.2.0: pre-warmup PRIMA della finestra di misura (bounded: <=50
         # rendering e <=0.7 s): clock GPU, buffer pinned, kernel esatto —
         # tutti fuori dalla misura. Errore qui = benchmark fallito.
@@ -1468,8 +1488,9 @@ class MandelbrotApp:
             for _ in range(50):
                 if time.perf_counter() - t_w > 0.7:
                     break
-                render()
+                render_dl()
         except Exception as ex:
+            self._bench_log("pre-warmup fallito", ex)
             self._bench_result = (0, b["secs"], str(ex), factor)
             self._bench_finished = True
             return
@@ -1488,9 +1509,11 @@ class MandelbrotApp:
             ok = True
             while time.perf_counter() < t_end:
                 try:
-                    render()
+                    render_dl()
                     count += 1
                 except Exception as ex:
+                    self._bench_log("misura fallita (prova %d/%d)"
+                                    % (run + 1, runs), ex)
                     err = str(ex)
                     ok = False
                     break
@@ -1502,9 +1525,50 @@ class MandelbrotApp:
         count = best
         if count == 0 and err is None:
             err = "nessun rendering completato"
+        if count == 0:
+            self._bench_log("benchmark completato a 0 rendering "
+                            "(err=%r)" % (err,))
         # thread-safe: il thread principale (in _poll) rileva il flag e mostra il risultato
         self._bench_result = (count, b["secs"], err, factor)
         self._bench_finished = True
+
+    def _bench_log(self, ctx, ex=None):
+        # v7.2.1: esito/ambiente del benchmark in ~/mandelbrot/bench.log —
+        # per diagnosticare hang/crash su hardware non collaudato (l'utente
+        # puo' inviarci il file). Troncato a ~200 righe per restare piccolo.
+        # Silenzioso: un errore qui non deve mai rompere il benchmark.
+        import platform
+        import sys
+        import traceback
+        p = os.path.join(os.path.dirname(CONFIG_PATH), "bench.log")
+        try:
+            os.makedirs(os.path.dirname(p), exist_ok=True)
+            old = []
+            if os.path.exists(p):
+                with open(p, "r", encoding="utf-8", errors="replace") as f:
+                    old = f.readlines()
+            e = [
+                "=" * 62 + "\n",
+                "%s  %s\n" % (time.strftime("%Y-%m-%d %H:%M:%S"), ctx),
+                "versione : %s\n" % VERSION,
+                "motore   : %s\n" % backend(),
+                "hw       : %s\n" % hw_name(),
+                "os       : %s\n" % platform.platform(),
+                "python   : %s\n" % sys.version.split()[0],
+                "numba    : %s\n" % (S._NUMBA_OK,),
+                "bench    : cx=%s cy=%s half=%s w=%s h=%s secs=%s mode=%s\n"
+                    % (self.bench["cx"], self.bench["cy"], self.bench["half"],
+                       self.bench["w"], self.bench["h"], self.bench["secs"],
+                       getattr(self, "_bench_mode", "standard")),
+            ]
+            if ex is not None:
+                e.append("errore   : %r\n" % (ex,))
+                e.append("".join(traceback.format_exception(
+                    type(ex), ex, ex.__traceback__)))
+            with open(p, "w", encoding="utf-8") as f:
+                f.write("".join(old[-150:] + e))
+        except Exception:
+            pass
 
     def _bench_done(self, count, secs, err, factor=1.0):
         S._BENCH_ACTIVE = False
