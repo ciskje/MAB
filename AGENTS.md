@@ -5,7 +5,8 @@ Git traccia solo i sorgenti; tutto il resto è generato o dato utente.
 
 | file | ruolo |
 |---|---|
-| `mandel.py` | il programma (Tkinter + 4 backend: CPU numpy/Numba, CUDA CuPy, Metal pyobjc, Vulkan wgpu; fallback CPU). Fonte di verità per versione + STORICO (blocco `Insieme di Mandelbrot - visualizzatore interattivo` in cima) |
+| `mandelbrot/` | il programma (pacchetto: `config`/`palette`/`state`/`mem`/`cpu`/`cuda`/`metal`/`vulkan`/`engine`/`app`; Tkinter + 4 backend con fallback CPU). Fonte di verità per versione (`__init__.py`: `VERSION` + `HISTORY` ultime 10) |
+| `mandel.py` | shim entry-point (re-export + `main()`); tiene l'header `# VERSIONE` letto da `mandelbrot.spec`/`build_app.py` e la compat `import mandel` di `make_icon.py` |
 | `spec.md` | specifica; resta in sync col sorgente (regola §2) |
 | `build_app.py` | unico script di build (icona → PyInstaller → post); dettaglio in `spec.md` §11 |
 | `mandelbrot.spec` | ricetta PyInstaller multipiattaforma |
@@ -17,12 +18,13 @@ Mai in git (gitignorati): `dist/` (anche gli zip/`.dmg` distributivi), `build/`,
 config utente.
 
 ## 2. Versionamento sorgente (OBBLIGATORIO)
-Solo per modifiche a sorgenti Python (`mandel.py` e altri `.py`).
+Solo per modifiche a sorgenti Python (`mandelbrot/`, `mandel.py` e altri `.py`).
 Le modifiche alla sola `spec.md`/doc non richiedono bump.
 Ogni modifica bumper DEVE:
-1. Incrementare `mandel.py` in entrambi i punti (devono coincidere):
-   header `# VERSIONE: X.Y.Z` (letto da `mandelbrot.spec`/`build_app.py`) e
-   costante `VERSION = "X.Y.Z"` (titolo + JSON zona).
+1. Incrementare la versione in entrambi i punti (devono coincidere):
+   costante `VERSION = "X.Y.Z"` in `mandelbrot/__init__.py` (titolo + JSON
+   zona) e header `# VERSIONE: X.Y.Z` dello shim `mandel.py` (letto da
+   `mandelbrot.spec`/`build_app.py`).
    Livelli: patch `x.y.Z` (bugfix o modifica minima: un dialog, un testo,
    un'opzione); minor `x.Y.0` (funzione nuova/cambiata); major `X.0.0`
    (riscrittura/architettura).

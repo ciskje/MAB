@@ -14,17 +14,26 @@ backend → implementazione (§6.1–§6.4) → pipeline → UI → file → ben
 build → gotchas (§12.1–§12.6).
 
 ## 1. Stack e architettura
-- Un solo file Python 3.14: GUI `tkinter`, rendering su 1 di 4 backend
-  selezionabili — CPU (numpy/Numba), CUDA (CuPy `RawKernel`), Metal (pyobjc),
-  Vulkan (wgpu/wgpu-native) — con fallback CPU; Pillow per PNG.
+- Pacchetto Python 3.14 `mandelbrot/` + shim `mandel.py`: GUI `tkinter`,
+  rendering su 1 di 4 backend selezionabili — CPU (numpy/Numba), CUDA (CuPy
+  `RawKernel`), Metal (pyobjc), Vulkan (wgpu/wgpu-native) — con fallback CPU;
+  Pillow per PNG. `mandel.py` resta l'entry point (re-export + `main()`) così
+  `mandelbrot.spec`, `build_app.py` e `make_icon.py` sono invariati.
+  Moduli: `config` (costanti), `palette` (PALETTES/make_lut puri), `state`
+  (tutti i mutabili ex-globali + `apply_palette`), `mem` (query memoria),
+  `cpu`/`cuda`/`metal`/`vulkan` (backend), `engine` (dispatch `compute()` +
+  warmup), `app` (`MandelbrotApp` + `main`). I moduli leggono/scrivono lo
+  stato come `S.NOME` (`from . import state as S`); `mem` importa `cuda` lazy
+  dentro la funzione (niente cicli import).
   Backend non disponibili restano visibili in toolbar ma disabilitati (grigi).
 - Render su thread worker, UI mai bloccata (§7).
-- Metodi di `MandelbrotApp` raggruppati per funzione: UI, vista, controlli,
-  pipeline, file, foto, benchmark.
-- Versione in due punti che devono coincidere: header `# VERSIONE: X.Y.Z`
-  (letto da `mandelbrot.spec`/`build_app.py` per EXE/.app/zip) e costante
-  runtime `VERSION = "X.Y.Z"` (titolo + JSON zona). Incremento/STORICO: vedi
-  `AGENTS.md`.
+- Metodi di `MandelbrotApp` (in `mandelbrot/app.py`) raggruppati per funzione:
+  UI, vista, controlli, pipeline, file, foto, benchmark.
+- Versione in due punti che devono coincidere: costante `VERSION = "X.Y.Z"`
+  in `mandelbrot/__init__.py` (titolo + JSON zona + Help) e header
+  `# VERSIONE: X.Y.Z` dello shim `mandel.py` (letto da `mandelbrot.spec`/
+  `build_app.py` per EXE/.app/zip). `HISTORY` (ultime 10) vive in
+  `mandelbrot/__init__.py`. Incremento/STORICO: vedi `AGENTS.md`.
 - Dipendenze: numpy (sempre); Numba (opzionale, altrimenti fallback numpy
   single-core); CuPy (CUDA); pyobjc (Metal); wgpu (Vulkan); Pillow (PNG, icona).
 
@@ -370,7 +379,8 @@ CUDA (solo per CUDA; Vulkan bundled).
   `--workpath mandelbrot_build` + `--distpath mandelbrot_dist` in temp) →
   post (verifica + zip/dmg) → cleanup. Intermedie `build/` mai nel progetto
   (lento su share di rete).
-- Ricetta `mandelbrot.spec`: comune `collect_all(numba/llvmlite)`,
+- Ricetta `mandelbrot.spec`: entry `mandel.py` (shim) + pacchetto `mandelbrot/`
+  seguito automaticamente da PyInstaller; comune `collect_all(numba/llvmlite)`,
   `PIL._tkinter_finder`, escluse `torch/matplotlib/IPython/pytest`;
   win32 `collect_all(cupy)` (solo moduli, no DLL CUDA) +
   `collect_all(wgpu/cffi)` + `hiddenimports wgpu.backends.wgpu_native`, icona
