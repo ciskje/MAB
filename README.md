@@ -21,10 +21,20 @@ Vulkan incluso ovunque; CUDA richiede driver NVIDIA + runtime utente
 (scaricabile da [NVIDIA CUDA Downloads](https://developer.nvidia.com/cuda-downloads)).
 Altre versioni nella pagina [Releases](https://github.com/ciskje/MAB/releases).
 
-> **macOS al primo avvio**: l'app è firmata ad-hoc, non notarizzata da
-> Apple, quindi Gatekeeper la blocca. Trascinala in `Applicazioni`, poi
-> tasto destro (Ctrl-clic) su `Mandelbrot.app` → **Apri** → **Apri**.
-> In alternativa da terminale: `xattr -cr /Applications/Mandelbrot.app`.
+**macOS — ATTENZIONE al primo avvio**: l'app è firmata ad-hoc e **Apple non
+l'ha approvata** (nessun certificato Developer ID), quindi Gatekeeper la
+blocca con "Sviluppatore non identificato". È normale, non
+è un difetto né un virus. Per aprirla:
+
+1. Estrai il `.dmg` e trascina `Mandelbrot.app` nella cartella `Applicazioni`.
+2. In `Applicazioni`: **tasto destro (Ctrl-clic) su `Mandelbrot.app` → Apri → Apri**.
+3. Da quel momento l'app si avvia normalmente come qualsiasi altra.
+
+Alternativa da terminale (una tantum):
+
+```bash
+xattr -cr /Applications/Mandelbrot.app
+```
 
 ![Python](https://img.shields.io/badge/python-3.14-blue)
 [![Licenza: MIT](https://img.shields.io/badge/Licenza-MIT-yellow.svg)](LICENSE)
