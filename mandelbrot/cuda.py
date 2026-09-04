@@ -389,7 +389,9 @@ def _cuda_split_diag():
     except Exception:
         return "non disponibile"
     if S._CUDA_SPLIT_PARITY_OK is None:
-        return base + " (parity in corso...)"
+        if S._CUDA_SPLIT_CALIBRATING:
+            return base + " (parity in corso...)"
+        return base + " (parity mai eseguita: premi \u21bb per calibrare)"
     if S._CUDA_SPLIT_PARITY_OK:
         return base + " (parity OK: split bit-identico al single)"
     return base + (" (parity FALLITA: diff %.1f%%%s, split auto-disattivato)"

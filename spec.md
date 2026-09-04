@@ -115,7 +115,9 @@ Registro `PALETTES` (fonte unica): ordine = indice kernel (0 fuoco, 1 ghiaccio,
     warmup resta sul device scelto. Selezione singola esce dallo split
     (v7.1.2: anche il ritorno sulla gpu di partenza, che col vecchio check
     `_pos == _CUDA_DEV` veniva ignorato col menu che tornava su Entrambe);
-    reset torna a gpu1. Titolo/stato con entrambi i nomi (`hw_name`).
+    reset torna a gpu1. Diagnostica in Informazioni: rapporto + `mai
+    eseguita` (calibrazione on-demand mai lanciata) / `in corso` / esito
+    parity. Titolo/stato con entrambi i nomi (`hw_name`).
    Selezioni persistite (`cuda_device`, `cuda_split`, `cuda_split_ratio`,
    `vulkan_adapter`). Vulkan (v5.9.2): adapter fisici backend Vulkan da
    `_VULKAN_ADAPTERS` (deduplicati per vendor/device, default = ex
