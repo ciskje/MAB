@@ -1,10 +1,11 @@
-"""Mandelbrot v7.1.6 - pacchetto (ex mandel.py single-file).
+"""Mandelbrot v7.2.0 - pacchetto (ex mandel.py single-file).
 STORICO completo: `git log --oneline`. Qui solo le ultime 10 voci
 (lette da Help -> Novita` recenti...).
 """
-VERSION = "7.1.6"
+VERSION = "7.2.0"
 
 HISTORY = (
+    ("7.2.0", "2026-09-04", "Benchmark GPU a 4x area (2x per lato) con rps normalizzato x4 + pre-warmup pre-finestra; CPU 1x invariato; storici GPU rimesurati col metodo 4x; 'codice di sicurezza' ora 'codice di autenticità'; modalità standard/esperta memorizzata in config."),
     ("7.1.6", "2026-09-04", "Diagnostica split onesta: 'parity mai eseguita' se mai calibrato, 'in corso' solo durante la calibrazione."),
     ("7.1.5", "2026-09-04", "Cursore wait su root+canvas (su macOS il solo root non si vedeva sul canvas e restava appeso fino al movimento del mouse)."),
     ("7.1.4", "2026-09-04", "Cursore wait sempre ripristinato (anche su frame scartati); cambio motore riporta l'antialias a 1x1; nota README per il primo avvio su macOS."),

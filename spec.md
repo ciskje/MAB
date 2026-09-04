@@ -358,24 +358,42 @@ Sotto solo scarti + gotcha API.
 |---|---|---|---|---|---|---|
 | val | -0.7499302568795561 | -0.015139113925433963 | 5.226737155905588e-05 | 960x540 | 8.0 | sempre `auto_mi(half)` = 10915 |
 
+- Metodo di misura (v7.2.0): su GPU (CUDA/Vulkan/Metal) il bench renderizza
+  a 2x per lato (4x area: 960x540 -> 1920x1080; clamp 7680, fattore reale =
+  `(bw*bh)/(w*h)`) e riporta rps = misurato x4: l'overhead fisso
+  per-iterazione (Python, launch, sync) si ammortizza x4; kernel e copie
+  restano nella misura (scalano col'area, come lavoro reale dell'app).
+  `mi` invariato. La CPU resta 1x (a 4x area sarebbe troppo lenta).
+  Pre-warmup boundato (<=50 rendering e <=0.7 s) PRIMA della prima finestra
+  di misura: clock GPU, buffer pinned, kernel esatto — tutti fuori dalla
+  misura. Le barre "storico" GPU (BENCH_REF) sono rimesurate col metodo 4x
+  (v7.2.0: 415.0 / 306.5 / 188.5 / 134.0) e confrontabili con le nuove run;
+  la barra CPU resta una misura diretta (la CPU non usa la diluizione).
 - Esegue nel modo corrente (motore + f32/f64 di toolbar, GPU/adapter
   selezionato) ma SEMPRE 1x1 fisso (960x540 da config, mai NxN: la scala
-  persistente non tocca il bench); CUDA usa buffer proprio (allocato sul
+  persistente non tocca il bench; su GPU 2x per lato, vedi Metodo sopra);
+  CUDA usa buffer proprio (allocato sul
    device scelto), Metal/Vulkan output proprio, CPU memoria numpy. Per gli
    8 s ha la GPU in esclusiva (worker in pausa E ricalcolo NxN sospeso, §7);
    bench sempre 1x1, usa lo split se attivo (v6.2.4, storici confrontabili
    a parita' di selezione); se il device e' occupato/in reset il dialog
    FALLITO lo segnala con hint (riprovare o riavviare).
-- Report: dialog con `rendering/s` grande (42 pt, `#2ea44f`), statistiche
-  (n. rendering, ms/render; in esperta `migliore di 3 prove da 8 s`), codice
-  di sicurezza a 64 bit (16 hex in gruppi da 4, Entry copiabile + pulsante
+- Report: dialog con `rendering/s` grande (42 pt, `#2ea44f`; su GPU i
+  valori equivalenti a 1x dopo diluizione x4), statistiche (n. rendering,
+  ms/render — su GPU anche n. equivalenti + ms equivalente; in esperta
+  `migliore di 3 prove da 8 s`), codice
+  di autenticità a 64 bit (16 hex in gruppi da 4, Entry copiabile + pulsante
   `Copia`), grafico +
-  griglia parametri (riga `Hardware` da `hw_name()` + riga `Modalità`);
+  griglia parametri (riga `Metodo` 1x/4x + riga `Hardware` da `hw_name()` +
+  riga `Modalità`);
   errore → `BENCHMARK FALLITO` + dettaglio (`#e5534b`).
 - Valori bench in `config.json` clampati al load (`_load_bench`: secs 1–120,
   w/h 64–7680, half 1e-12–2, cx/cy ±2; malformato → default): niente piu'
   benchmark accorciati da valori spuri.
-- Codice di sicurezza (v7.1.0, `mandelbrot/expert.py`, tamper-evident NON
+- Modalità (v7.2.0): la scelta standard/esperta del dialog è memorizzata in
+  `config.json` (`bench_mode`, validata a load: solo standard/esperto,
+  altrimenti standard) e ripristinata all'avvio come pre-selezione.
+- Codice di autenticità (v7.1.0, `mandelbrot/expert.py`, tamper-evident NON
   anti-forgery: app open-source/offline, chi ricalcola il codice col
   programma modificato non e' rilevabile; il ritocco dello screenshot si'):
   24 bit rps (centesimi) + 16 bit impronta hw (SHA256 del nome normalizzato:
@@ -390,10 +408,10 @@ Sotto solo scarti + gotcha API.
 | barra | valore (rendering/s) | stile |
 |---|---|---|
 | `AMD 9900X (storico)` | 6.62 | grigia |
-| `4070 Super Vulkan (storico)` | 133.75 | grigia |
-| `5070 Ti Vulkan (storico)` | 182.75 | grigia |
-| `4070 Super CUDA (storico)` | 257.75 | grigia |
-| `5070 Ti CUDA (storico)` | 339.62 | grigia |
+| `4070 Super Vulkan (storico)` | 134.0 | grigia |
+| `5070 Ti Vulkan (storico)` | 188.5 | grigia |
+| `4070 Super CUDA (storico)` | 306.5 | grigia |
+| `5070 Ti CUDA (storico)` | 415.0 | grigia |
 | `<backend()> — questa run` | misurato | verde (solo metodo, no hw) |
 
   Grafico `tk.Canvas` 590xN (margini 230,60,8,26; barre 20 px, gap 10 px;

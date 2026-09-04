@@ -35,14 +35,20 @@ CONFIG_PATH = os.path.join(os.path.expanduser("~"), "mandelbrot", "config.json")
 BENCH = dict(cx=-0.7499302568795561, cy=-0.015139113925433963, half=5.226737155905588e-05,
              w=960, h=540, secs=8.0)
 
+# v7.2.0: diluizione benchmark GPU: 2x per lato (4x area) per ammortizzare
+# l'overhead fisso per-iterazione (Python/launch/sync); rps riportato =
+# misurato x4 (kernel e copie restano nella misura: scalano col'area).
+# La CPU resta 1x (a 4x area sarebbe troppo lenta).
+BENCH_GPU_SCALE = 2
+
 # Riferimenti storici per il grafico a barre del benchmark (rendering/s,
 # stessa regione/parametri): evidenziano il salto CPU->GPU su macchine note.
 BENCH_REF = (
     ("AMD 9900X (storico)", 6.62),
-    ("4070 Super Vulkan (storico)", 133.75),
-    ("5070 Ti Vulkan (storico)", 182.75),
-    ("4070 Super CUDA (storico)", 257.75),
-    ("5070 Ti CUDA (storico)", 339.62),
+    ("4070 Super Vulkan (storico)", 134.0),
+    ("5070 Ti Vulkan (storico)", 188.5),
+    ("4070 Super CUDA (storico)", 306.5),
+    ("5070 Ti CUDA (storico)", 415.0),
 )
 
 BACKEND_FG = {"cpu": "#1f6feb", "cuda": "#2ea44f",

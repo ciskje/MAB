@@ -1,12 +1,20 @@
 # ============================================================================
 # Insieme di Mandelbrot - visualizzatore interattivo
-# VERSIONE: 7.1.6
+# VERSIONE: 7.2.0
 # ----------------------------------------------------------------------------
 # Shim di compatibilita': il programma vive nel pacchetto mandelbrot/
 # (config/palette/state/mem/cuda/metal/vulkan/cpu/engine/app).
 # STORICO completo: git log --oneline. Ultime 10 voci in mandelbrot/__init__.py
 # (HISTORY, letta da Help -> Novita` recenti...).
 #
+# 7.2.0 - 2026-09-04
+#   - Benchmark GPU a 4x area (2x per lato) con rps normalizzato x4
+#     (diluisce l'overhead fisso per-iterazione) + pre-warmup boundato
+#     prima della finestra di misura; CPU resta 1x.
+#   - Storici benchmark GPU rimesurati col metodo 4x (415 / 306.5 /
+#     188.5 / 134).
+#   - 'Codice di sicurezza' rinominato 'Codice di autenticita'.
+#   - Modalita' benchmark (standard/esperta) memorizzata in config.
 # 7.1.6 - 2026-09-04
 #   - Diagnostica split onesta: 'parity mai eseguita' se mai calibrato,
 #     'in corso' solo durante la calibrazione.

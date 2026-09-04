@@ -1,4 +1,4 @@
-# MAB - Mandelbrot Ai benchmark per LLM agentica — v7.1.6
+# MAB - Mandelbrot Ai benchmark per LLM agentica — v7.2.0
 
 Questo repo è un **benchmark per testare le capacità agentiche e di
 programmazione di una LLM** su un progetto software reale e vivo: un
@@ -43,9 +43,10 @@ Altre versioni nella pagina [Releases](https://github.com/ciskje/MAB/releases).
   manuali.
 - **Ricalcolo antialiasing** 1x1/2x2/4x4/8x8, salvataggio PNG (`Ctrl+S`) e
   zone JSON (vista + iterazioni, ricaricabili).
-- **Benchmark standardizzato** (8 s) ed **Esperto** (3×8 s, vale la
-  migliore) con grafico dei riferimenti storici e **codice di sicurezza a
-  64 bit** anti-ritocco, verificabile in `Help > Verifica benchmark...`.
+- **Benchmark standardizzato** (8 s; su GPU a 4x area con rps normalizzato
+  ×4, CPU 1x) ed **Esperto** (3×8 s, vale la migliore) con grafico dei
+  riferimenti storici e **codice di autenticità a 64 bit** anti-ritocco,
+  verificabile in `Help > Verifica benchmark...`.
 
 ## Requisiti
 
@@ -84,7 +85,7 @@ progetto reale (refactor, bugfix verificati, bump di versione disciplinati).
 
 ![Stessa vista in palette termal](screenshot-ui2.png)
 
-![Risultato benchmark Esperto: 372.25 rendering/s, codice di sicurezza e confronto storici](screenshot-benchmark.png)
+![Risultato benchmark Esperto: 372.25 rendering/s, codice di autenticità e confronto storici](screenshot-benchmark.png)
 
 ![Verifica del codice: esito OK con rps decodificato](screenshot-verifica-bench.png)
 
@@ -97,6 +98,3 @@ progetto reale (refactor, bugfix verificati, bump di versione disciplinati).
 | `spec.md` | specifica tecnica (sempre in sync col sorgente) |
 | `build_app.py` / `mandelbrot.spec` / `hook_dlldir.py` | build PyInstaller |
 | `make_icon.py` | genera l'icona dell'app dal motore CPU |
-
-Versione corrente: vedi titolo in cima (fonte di verità: `VERSION` in
-`mandelbrot/__init__.py`).

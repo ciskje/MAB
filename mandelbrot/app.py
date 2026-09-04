@@ -18,7 +18,7 @@ from . import VERSION, HISTORY
 from .config import (INIT_W, INIT_H, CX0, CY0, HALF0, MI0, MI_AUTO_BASE,
     MI_AUTO_MIN, MI_AUTO_MAX, MIN_HALF, MIN_DIM, PHOTO_HEADROOM,
     PHOTO_HOST_RESERVE, PHOTO_BACKSTOP_MPX, CONFIG_PATH, BENCH, BENCH_REF,
-    BACKEND_FG, ERR_FG, auto_mi)
+    BENCH_GPU_SCALE, BACKEND_FG, ERR_FG, auto_mi)
 from .palette import PALETTES
 from .state import apply_palette
 from .mem import _photo_mem_ok
@@ -228,8 +228,11 @@ class MandelbrotApp:
             "rifiutati); "
             "Benchmark esegue "
             "il test standardizzato di 8 s nella vista corrente (Standard), "
-            "oppure 3 prove da 8 s di cui vale la migliore (Esperta). Il "
-            "risultato mostra un codice di sicurezza a 64 bit che lega "
+            "oppure 3 prove da 8 s di cui vale la migliore (Esperta). Su GPU "
+            "il test renderizza a 4x area (2x per lato) e riporta il "
+            "risultato normalizzato x4: diluisce l'overhead fisso per "
+            "iterazione; la CPU resta 1x. "
+            "Il risultato mostra un codice di autenticità a 64 bit che lega "
             "rendering/s + hardware + resto dei campi: smaschera il ritocco "
             "dello screenshot (Help > Verifica benchmark... per "
             "controllarlo)."
@@ -295,7 +298,7 @@ class MandelbrotApp:
         self._modal(win)
 
     def show_verify(self):
-        # v7.1.0: verifica del codice di sicurezza di un benchmark (Help ->
+        # v7.1.0: verifica del codice di autenticità di un benchmark (Help ->
         # Verifica benchmark...). L'utente digita codice + nome hardware letto
         # dallo screenshot (+ resto dei campi, precompilati coi default): il
         # codice viene ricalcolato e confrontato. Solo decodifica+confronto,
@@ -307,7 +310,7 @@ class MandelbrotApp:
         win.resizable(False, False)
         body = tk.Frame(win, padx=26, pady=20)
         body.pack(fill="both", expand=True)
-        tk.Label(body, text="Verifica codice di sicurezza",
+        tk.Label(body, text="Verifica codice di autenticità",
                  font=("Segoe UI", 14, "bold"),
                  foreground=_backend_fg()).pack(anchor="w")
         tk.Label(body, text="Digita codice e dati letti dallo screenshot:",
@@ -930,8 +933,8 @@ class MandelbrotApp:
             self._show(frame[0], frame[1], frame[2])
         if self._bench_finished:
             self._bench_finished = False
-            count, secs, err = self._bench_result
-            self._bench_done(count, secs, err)
+            count, secs, err, factor = self._bench_result
+            self._bench_done(count, secs, err, factor)
         if self._photo_finished:
             self._photo_finished = False
             img, view, n, rt, err = self._photo_result
@@ -1057,6 +1060,7 @@ class MandelbrotApp:
                  cuda_split=S._CUDA_SPLIT_ON,
                  cuda_split_ratio=S._CUDA_SPLIT_RATIO,
                  vulkan_adapter=S._VULKAN_DEV,
+                 bench_mode=getattr(self, "_bench_mode", "standard"),
                  bench=dict(self.bench))
         try:
             d = os.path.dirname(CONFIG_PATH)
@@ -1082,6 +1086,9 @@ class MandelbrotApp:
         # v5.1.1: view_file non viene ripristinato: 'Salva zona' chiede sempre
         # il nome finche' non si carica/salva una zona in questa sessione.
         self._load_bench(c.get("bench"))
+        # v7.2.0: modalita' benchmark memorizzata (solo standard/esperto).
+        bm = c.get("bench_mode", "standard")
+        self._bench_mode = bm if bm in ("standard", "esperto") else "standard"
         self._select_palette(c.get("palette", "fuoco"))
         # v5.6.0: il backend e' per nome (cpu/cuda/metal/vulkan); i vecchi
         # valori "gpu" (v5.4.x/5.5.0) migrano al default GPU. _select_backend
@@ -1160,11 +1167,17 @@ class MandelbrotApp:
     def _bench_rows(self, mode=None):
         b = self.bench
         mi = auto_mi(b["half"])
+        # v7.2.0: metodo di misura (GPU diluizione 4x area, CPU 1x).
+        scale = BENCH_GPU_SCALE if S._ACTIVE != "cpu" else 1
         rows = [
-            ("Regione", f"c = ({b['cx']}, {b['cy']}i)"),
+            ("Regione", f"c = ({b['cx']}, {b['cy']})"),
             ("Met\u00e0 lato", f"{b['half']:.3e}"),
             ("Iterazioni", f"{mi}\u00a0 (formula auto)"),
-            ("Risoluzione", f"{b['w']} \u00d7 {b['h']} px"),
+            ("Risoluzione", f"{b['w']} \u00d7 {b['h']} px"
+             + (f" \u00d7{scale:g} per lato ({b['w']*scale}\u00d7{b['h']*scale})"
+                if scale > 1 else "")),
+            ("Metodo", "GPU: diluizione 4x area, rps \u00d74"
+                     if scale > 1 else "CPU: 1x (no diluizione)"),
             ("Motore", f"{backend()} (corrente)"),
             ("Hardware", hw_name()),
             ("Durata", f"{b['secs']:.0f} s"),
@@ -1264,7 +1277,8 @@ class MandelbrotApp:
             tk.Label(rows, text=v, anchor="e",
                      font=("Consolas", 12)).grid(row=i, column=1, sticky="e",
                                                   padx=(18, 0), pady=3)
-        mode_var = tk.StringVar(value="standard")
+        # v7.2.0: pre-selezionata la modalita' memorizzata (config bench_mode).
+        mode_var = tk.StringVar(value=getattr(self, "_bench_mode", "standard"))
         tk.Radiobutton(body, text="Standard: 1 prova da 8 s",
                        variable=mode_var, value="standard").pack(anchor="w", pady=(12, 0))
         tk.Radiobutton(body, text="Esperta: 3 prove da 8 s, vale la migliore",
@@ -1289,8 +1303,10 @@ class MandelbrotApp:
             return None
         return getattr(win, "_mode", "standard")
 
-    def _bench_result_dialog(self, count, secs, err):
-        """Dialog risultato: rendering/s grande e evidente come vero risultato."""
+    def _bench_result_dialog(self, count, secs, err, factor=1.0):
+        """Dialog risultato: rendering/s grande e evidente come vero risultato.
+        v7.2.0: factor = diluizione GPU (4x area -> rps misurato x4);
+        le statistiche mostrano i rendering equivalenti a 1x."""
         win = tk.Toplevel(self.root)
         win.title("Benchmark \u2014 risultato")
         win.resizable(False, False)
@@ -1300,25 +1316,33 @@ class MandelbrotApp:
                  font=("Segoe UI", 14, "bold")).pack(anchor="w")
         mode = getattr(self, "_bench_mode", "standard")
         if count > 0:
+            rps = count / secs * factor  # v7.2.0: rps equivalenti a 1x
             tk.Frame(body, bg="#8a8a8a", height=1).pack(fill="x", pady=(10, 0))
-            tk.Label(body, text=f"{count/secs:.2f}",
+            tk.Label(body, text=f"{rps:.2f}",
                      font=("Segoe UI", 42, "bold"),
                      foreground="#2ea44f").pack(pady=(16, 0))
             tk.Label(body, text="rendering / secondo",
                      font=("Segoe UI", 13, "bold"),
                      foreground="#2ea44f").pack(pady=(0, 8))
-            tk.Label(body, text=f"{count} rendering in {secs:.1f} s   \u00b7   {secs/count*1000:.0f} ms ciascuno",
-            ).pack(pady=(0, 8))
+            if factor > 1:
+                n_eff = count * factor
+                stat = (f"{count} rendering {factor:g}x in {secs:.1f} s   \u00b7   "
+                        f"= {n_eff:.0f} equivalenti ({secs*1000/n_eff:.0f} ms "
+                        f"ciascuno)")
+            else:
+                stat = (f"{count} rendering in {secs:.1f} s   \u00b7   "
+                        f"{secs/count*1000:.0f} ms ciascuno")
+            tk.Label(body, text=stat).pack(pady=(0, 8))
             if mode == "esperto":
                 tk.Label(body, text="migliore di 3 prove da 8 s",
                          font=("Segoe UI", 11, "italic")).pack(pady=(0, 8))
-            # v7.1.0: codice di sicurezza (tamper-evident): lega rps +
+            # v7.1.0: codice di autenticità (tamper-evident): lega rps +
             # hardware + resto dei campi; verificabile in Help > Verifica.
             # v7.1.2: campo copiabile (Entry readonly + pulsante Copia).
             b = self.bench
-            code = make_code(count / secs, hw_name(), backend(), S._PREC,
+            code = make_code(rps, hw_name(), backend(), S._PREC,
                              VERSION, auto_mi(b["half"]), b["secs"])
-            tk.Label(body, text="Codice di sicurezza:",
+            tk.Label(body, text="Codice di autenticità:",
                      ).pack(anchor="w", pady=(0, 2))
             crow = tk.Frame(body)
             crow.pack(anchor="w", pady=(0, 16))
@@ -1340,7 +1364,7 @@ class MandelbrotApp:
             copied.pack(side="left", padx=(8, 0))
             tk.Label(body, text="Confronto coi riferimenti storici (rendering/s):",
                      ).pack(anchor="w", pady=(0, 4))
-            self._bench_chart(body, count / secs).pack(anchor="w", pady=(2, 14))
+            self._bench_chart(body, rps).pack(anchor="w", pady=(2, 14))
         else:
             tk.Label(body, text="BENCHMARK FALLITO",
                      font=("Segoe UI", 20, "bold"),
@@ -1378,6 +1402,8 @@ class MandelbrotApp:
             self.status.config(text="benchmark annullato")
             return
         self._bench_mode = mode
+        # v7.2.0: modalita' scelta memorizzata (flush config entro 1 s / exit).
+        self._cfg_dirty = True
         # v6.1.1: mai in contesa col ricalcolo NxN sullo stesso device
         # (un kernel gigante in parallelo al bench crollava il conteggio).
         # Se una foto e' in corso, il bench parte accodato a fine ricalcolo.
@@ -1409,7 +1435,15 @@ class MandelbrotApp:
     def _bench_worker(self):
         b = self.bench
         mi = auto_mi(b["half"])
-        need = b["w"] * b["h"] * 3
+        # v7.2.0: diluizione GPU — 2x per lato (4x area): l'overhead fisso
+        # per-iterazione (Python/launch/sync) si ammortizza x4 e l'rps
+        # riportato = misurato x4 (kernel e copie restano nella misura:
+        # scalano col'area). La CPU resta 1x (a 4x area sarebbe troppo lenta).
+        scale = BENCH_GPU_SCALE if S._ACTIVE != "cpu" else 1
+        bw = min(b["w"] * scale, 7680)
+        bh = min(b["h"] * scale, 7680)
+        factor = (bw * bh) / (b["w"] * b["h"])
+        need = bw * bh * 3
         bench_buf = None
         # v5.6.0: il buffer di lavoro serve solo al percorso CUDA (Metal/Vulkan
         # usano il proprio buffer, CPU la memoria numpy).
@@ -1424,8 +1458,21 @@ class MandelbrotApp:
             except Exception:
                 bench_buf = None
         def render():
-            return compute(b["cx"], b["cy"], b["half"], b["w"], b["h"], mi,
+            return compute(b["cx"], b["cy"], b["half"], bw, bh, mi,
                            buf=bench_buf)
+        # v7.2.0: pre-warmup PRIMA della finestra di misura (bounded: <=50
+        # rendering e <=0.7 s): clock GPU, buffer pinned, kernel esatto —
+        # tutti fuori dalla misura. Errore qui = benchmark fallito.
+        t_w = time.perf_counter()
+        try:
+            for _ in range(50):
+                if time.perf_counter() - t_w > 0.7:
+                    break
+                render()
+        except Exception as ex:
+            self._bench_result = (0, b["secs"], str(ex), factor)
+            self._bench_finished = True
+            return
         # v7.1.0 (esperto): N prove da b['secs'] s, vale la migliore tra
         # quelle completate; errore -> stop (il device e' probabilmente
         # occupato/in reset, riprovare non serve).
@@ -1456,15 +1503,15 @@ class MandelbrotApp:
         if count == 0 and err is None:
             err = "nessun rendering completato"
         # thread-safe: il thread principale (in _poll) rileva il flag e mostra il risultato
-        self._bench_result = (count, b["secs"], err)
+        self._bench_result = (count, b["secs"], err, factor)
         self._bench_finished = True
 
-    def _bench_done(self, count, secs, err):
+    def _bench_done(self, count, secs, err, factor=1.0):
         S._BENCH_ACTIVE = False
         self._bench_running = False
         self._busy_off()
         self.status.config(text="benchmark completato")
-        self._bench_result_dialog(count, secs, err)
+        self._bench_result_dialog(count, secs, err, factor)
         # v6.1.1: rinfresca la vista corrente (durante il bench i render
         # erano sospesi); rispetta la scala NxN persistente.
         self.recalc_scaled()
