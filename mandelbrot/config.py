@@ -39,10 +39,10 @@ BENCH = dict(cx=-0.7499302568795561, cy=-0.015139113925433963, half=5.2267371559
 # stessa regione/parametri): evidenziano il salto CPU->GPU su macchine note.
 BENCH_REF = (
     ("AMD 9900X (storico)", 6.62),
-    ("4070 Super Vulkan (storico)", 124.0),
-    ("5070 Ti Vulkan (storico)", 179.0),
-    ("4070 Super CUDA (storico)", 250.0),
-    ("5070 Ti CUDA (storico)", 350.0),
+    ("4070 Super Vulkan (storico)", 133.75),
+    ("5070 Ti Vulkan (storico)", 182.75),
+    ("4070 Super CUDA (storico)", 257.75),
+    ("5070 Ti CUDA (storico)", 339.62),
 )
 
 BACKEND_FG = {"cpu": "#1f6feb", "cuda": "#2ea44f",

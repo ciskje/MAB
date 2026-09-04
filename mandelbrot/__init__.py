@@ -1,11 +1,11 @@
-"""Mandelbrot v7.1.2 - pacchetto (ex mandel.py single-file).
+"""Mandelbrot v7.1.3 - pacchetto (ex mandel.py single-file).
 STORICO completo: `git log --oneline`. Qui solo le ultime 10 voci
 (lette da Help -> Novita` recenti...).
 """
-VERSION = "7.1.2"
+VERSION = "7.1.3"
 
 HISTORY = (
-    ("7.1.2", "2026-09-04", "Fix dropdown GPU: con split attivo riselezionare la gpu di partenza veniva ignorato (menu tornava su Entrambe)."),
+    ("7.1.3", "2026-09-04", "Storici benchmark GPU aggiornati ai valori verificati in modalita' Esperta."),
     ("7.1.1", "2026-09-04", "Codice sicurezza copiabile (Entry + Copia); clamp valori bench in config (secs/w/h/half sempre sani)."),
     ("7.1.0", "2026-09-04", "Benchmark Esperto (3x8 s, vale la migliore) + codice di sicurezza a 64 bit + Help Verifica benchmark."),
     ("7.0.1", "2026-09-04", "Fix split: import mancanti (struct in vulkan/metal, time+BENCH/auto_mi in cuda, _fmt_lut in metal); Vulkan rende di nuovo."),

@@ -381,10 +381,10 @@ Sotto solo scarti + gotcha API.
 | barra | valore (rendering/s) | stile |
 |---|---|---|
 | `AMD 9900X (storico)` | 6.62 | grigia |
-| `4070 Super Vulkan (storico)` | 124.0 | grigia |
-| `5070 Ti Vulkan (storico)` | 179.0 | grigia |
-| `4070 Super CUDA (storico)` | 250.0 | grigia |
-| `5070 Ti CUDA (storico)` | 350.0 | grigia |
+| `4070 Super Vulkan (storico)` | 133.75 | grigia |
+| `5070 Ti Vulkan (storico)` | 182.75 | grigia |
+| `4070 Super CUDA (storico)` | 257.75 | grigia |
+| `5070 Ti CUDA (storico)` | 339.62 | grigia |
 | `<backend()> — questa run` | misurato | verde (solo metodo, no hw) |
 
   Grafico `tk.Canvas` 590xN (margini 230,60,8,26; barre 20 px, gap 10 px;
