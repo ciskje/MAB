@@ -26,16 +26,6 @@ Altre versioni nella pagina [Releases](https://github.com/ciskje/MAB/releases).
 > tasto destro (Ctrl-clic) su `Mandelbrot.app` → **Apri** → **Apri**.
 > In alternativa da terminale: `xattr -cr /Applications/Mandelbrot.app`.
 
-## Motivazioni
-
-Il progetto nasce per confrontare dal vero CPU e GPU sullo stesso calcolo
-(escape-time con interior analitico e coloring smooth identici su tutti i
-backend, a meno di 1–2 ULP): quanto rende Numba contro CuPy, Metal e Vulkan
-sulla stessa immagine, e dove la precisione f32 inizia a divergere nei
-deep-zoom. In più è un banco di prova per lo sviluppo assistito da AI
-locale (vedi sotto): specifica e codice evolvono insieme, ogni versione è
-verificata bit-identica prima del commit.
-
 ![Python](https://img.shields.io/badge/python-3.14-blue)
 [![Licenza: MIT](https://img.shields.io/badge/Licenza-MIT-yellow.svg)](LICENSE)
 
