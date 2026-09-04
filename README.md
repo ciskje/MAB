@@ -14,7 +14,7 @@ bit-identico prima di ogni commit (vedi sotto).
 
 | Piattaforma | File |
 |---|---|
-| Windows 64-bit (v7.1.3) | [Mandelbrot-v7.1.3-win64.zip](https://github.com/ciskje/MandelbrotTest/releases/download/v7.1.3/Mandelbrot-v7.1.3-win64.zip) |
+| Windows 64-bit (v7.1.6) | [Mandelbrot-v7.1.6-win64.zip](https://github.com/ciskje/MandelbrotTest/releases/download/v7.1.6/Mandelbrot-v7.1.6-win64.zip) |
 | macOS (v5.10.2) | [Mandelbrot-v5.10.2-macos.dmg](https://github.com/ciskje/MandelbrotTest/releases/download/v5.10.2/Mandelbrot-v5.10.2-macos.dmg) |
 
 Vulkan incluso ovunque; CUDA richiede driver NVIDIA + runtime utente

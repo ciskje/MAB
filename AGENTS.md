@@ -52,6 +52,10 @@ Commit e push su GitHub SOLO su richiesta esplicita dell'utente, mai in
 automatico (istruzione permanente: niente commit/push di iniziativa).
 La build con `python build_app.py` avviene solo su richiesta esplicita,
 fuori dall'ordine automatico.
+README per le release (istruzione permanente): a ogni bump di versione
+aggiornare in `README.md` il numero nel titolo e, se si pubblica una
+Release, i link della sezione Download
+(`.../releases/download/<tag>/<file>` per piattaforma).
 Dettaglio tecnico: `spec.md` §11.
 
 ## 4. Note operative
