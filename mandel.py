@@ -1,12 +1,15 @@
 # ============================================================================
 # Insieme di Mandelbrot - visualizzatore interattivo
-# VERSIONE: 7.1.1
+# VERSIONE: 7.1.2
 # ----------------------------------------------------------------------------
 # Shim di compatibilita': il programma vive nel pacchetto mandelbrot/
 # (config/palette/state/mem/cuda/metal/vulkan/cpu/engine/app).
 # STORICO completo: git log --oneline. Ultime 10 voci in mandelbrot/__init__.py
 # (HISTORY, letta da Help -> Novita` recenti...).
 #
+# 7.1.2 - 2026-09-04
+#   - Fix dropdown GPU: con split attivo riselezionare la gpu di partenza
+#     veniva ignorato (il menu tornava su Entrambe).
 # 7.1.1 - 2026-09-04
 #   - Codice sicurezza copiabile (Entry + Copia); clamp valori bench in
 #     config (secs 1-120, w/h 64-7680, half>0: mai piu' bench accorciati).

@@ -737,7 +737,11 @@ class MandelbrotApp:
             return
         _pos = next((k for k, (d, _n) in enumerate(S._CUDA_DEVICES) if d == _id),
                     None)
-        if _pos is None or _pos == S._CUDA_DEV:
+        # v7.1.2: con lo split attivo anche il "ritorno" sullo stesso device
+        # e' un cambio (lo split non tocca S._CUDA_DEV: senza questo check
+        # riselezionare la gpu di partenza veniva ignorato e il menu tornava
+        # su "Entrambe").
+        if _pos is None or (_pos == S._CUDA_DEV and not S._CUDA_SPLIT_ON):
             self._sync_gpu_menu()
             return
         self._select_cuda_device(_pos)

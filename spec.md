@@ -108,12 +108,14 @@ Registro `PALETTES` (fonte unica): ordine = indice kernel (0 fuoco, 1 ghiaccio,
   render in bande orizzontali sulle prime 2 CUDA con rapporto fisso
   (v6.2.5: dropdown 33% 66% / 50% 50% / 66% 33% + label corrente;
   calibrazione automatica solo su richiesta col pulsante ricampiona);
-   kernel con offset `row0` (bit-identico al single), buffer device separati
-   per banda (`_CUDA_SPLIT_BUFS`), cucitura su host pinned, fallback single
-   in errore; sotto 32 px di altezza resta single (soglia tecnica). Render
-   interattivi, full, foto NxN e benchmark (v6.2.4) usano lo split;
-   warmup resta sul device scelto. Selezione singola esce dallo split;
-   reset torna a gpu1. Titolo/stato con entrambi i nomi (`hw_name`).
+    kernel con offset `row0` (bit-identico al single), buffer device separati
+    per banda (`_CUDA_SPLIT_BUFS`), cucitura su host pinned, fallback single
+    in errore; sotto 32 px di altezza resta single (soglia tecnica). Render
+    interattivi, full, foto NxN e benchmark (v6.2.4) usano lo split;
+    warmup resta sul device scelto. Selezione singola esce dallo split
+    (v7.1.2: anche il ritorno sulla gpu di partenza, che col vecchio check
+    `_pos == _CUDA_DEV` veniva ignorato col menu che tornava su Entrambe);
+    reset torna a gpu1. Titolo/stato con entrambi i nomi (`hw_name`).
    Selezioni persistite (`cuda_device`, `cuda_split`, `cuda_split_ratio`,
    `vulkan_adapter`). Vulkan (v5.9.2): adapter fisici backend Vulkan da
    `_VULKAN_ADAPTERS` (deduplicati per vendor/device, default = ex
