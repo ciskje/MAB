@@ -571,6 +571,11 @@ class MandelbrotApp:
     def set_backend(self, b):
         if not self._select_backend(b):
             return
+        # v7.1.4: il cambio motore riporta l'antialias a 1x1 (via trace
+        # parte un ricalcolo intermedio, poi collassa sul request_render
+        # finale come nel reset).
+        if self._recalc_n() != 1:
+            self.recalc_var.set("1x1")
         self._refresh_gpu_menu()
         self._sync_precision_buttons()
         self._refresh_title()
@@ -866,6 +871,20 @@ class MandelbrotApp:
             self._job = (view, w, h, self._gen)
             self._cv.notify()
 
+    def _busy_on(self):
+        # v7.1.5: il watch va messo ANCHE sul canvas: su macOS il cursore
+        # del toplevel non si propaga al canvas sotto il puntatore (resta
+        # la freccia durante il render, o la clessidra resta appesa fino
+        # al primo movimento del mouse). Sul canvas invece vale subito,
+        # in entrambe le direzioni (verificato via NSCursor).
+        self.root.config(cursor="watch")
+        self.canvas.config(cursor="watch")
+
+    def _busy_off(self):
+        # vedi _busy_on (il clear sul solo root restava appeso).
+        self.root.config(cursor="")
+        self.canvas.config(cursor="")
+
     def _worker_loop(self):
         while True:
             with self._cv:
@@ -881,14 +900,22 @@ class MandelbrotApp:
                 continue
             view, w, h, gen = job
             try:
-                self.root.after(0, lambda: self.root.config(cursor="watch"))
+                self.root.after(0, self._busy_on)
                 t0 = time.perf_counter()
                 img = compute(view[0], view[1], view[2], w, h, view[3], my_gen=gen)
                 rt = time.perf_counter() - t0
             except Exception:
-                self.root.after(0, lambda: self.root.config(cursor=""))
+                self.root.after(0, self._busy_off)
                 continue
             if S._GEN[0] != gen:
+                # obsoleto (vista cambiata): scarto il frame parziale.
+                # v7.1.4: se non c'e' lavoro piu' nuovo in coda, tolgo il
+                # watch (prima restava appeso: solo _show lo toglieva, ma
+                # i frame scartati non arrivano mai a _show).
+                with self._cv:
+                    _pending = self._job is not None
+                if not _pending:
+                    self.root.after(0, self._busy_off)
                 continue  # obsoleto (vista cambiata): scarto il frame parziale
             self._frames.put((img, self._last_msg, rt))
 
@@ -912,7 +939,7 @@ class MandelbrotApp:
         self.root.after(30, self._poll)
 
     def _show(self, img, msg, rt=0.0):
-        self.root.config(cursor="")
+        self._busy_off()
         w, h = self.canvas_size()
         if img.size != (w, h):
             img = img.resize((w, h), Image.NEAREST)
@@ -1373,7 +1400,7 @@ class MandelbrotApp:
             self.root.after_cancel(self._full_timer)
             self._full_timer = None
         self._bench_running = True
-        self.root.config(cursor="watch")
+        self._busy_on()
         _n = 3 if getattr(self, "_bench_mode", "standard") == "esperto" else 1
         self.status.config(text=f"benchmark in corso ({self.bench['secs']:.0f} s"
                                 + (f" \u00d7 {_n}..." if _n > 1 else "...") + ")")
@@ -1435,7 +1462,7 @@ class MandelbrotApp:
     def _bench_done(self, count, secs, err):
         S._BENCH_ACTIVE = False
         self._bench_running = False
-        self.root.config(cursor="")
+        self._busy_off()
         self.status.config(text="benchmark completato")
         self._bench_result_dialog(count, secs, err)
         # v6.1.1: rinfresca la vista corrente (durante il bench i render
@@ -1507,7 +1534,7 @@ class MandelbrotApp:
         S._GEN[0] = self._gen
         self._photo_running = True
         self.recalc_btn.config(state="disabled")
-        self.root.config(cursor="watch")
+        self._busy_on()
         self.status.config(text=f"ricalcolo in corso (antialiasing {n}x{n}, non toccare)...")
         threading.Thread(target=self._photo_worker, args=(view, w, h, n),
                          daemon=True).start()
@@ -1550,7 +1577,7 @@ class MandelbrotApp:
         self._photo_result = None
         self._photo_running = False
         self.recalc_btn.config(state="normal")
-        self.root.config(cursor="")
+        self._busy_off()
         if getattr(self, "_bench_after_photo", False):
             self._photo_pending = False
             self._start_bench()

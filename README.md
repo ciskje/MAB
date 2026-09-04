@@ -1,4 +1,4 @@
-# MAB - Mandelbrot Ai benchmark per LLM agentica — v7.1.3
+# MAB - Mandelbrot Ai benchmark per LLM agentica — v7.1.5
 
 Questo repo è un **benchmark per testare le capacità agentiche e di
 programmazione di una LLM** su un progetto software reale e vivo: un
@@ -20,6 +20,11 @@ bit-identico prima di ogni commit (vedi sotto).
 Vulkan incluso ovunque; CUDA richiede driver NVIDIA + runtime utente
 (scaricabile da [NVIDIA CUDA Downloads](https://developer.nvidia.com/cuda-downloads)).
 Altre versioni nella pagina [Releases](https://github.com/ciskje/MandelbrotTest/releases).
+
+> **macOS al primo avvio**: l'app è firmata ad-hoc, non notarizzata da
+> Apple, quindi Gatekeeper la blocca. Trascinala in `Applicazioni`, poi
+> tasto destro (Ctrl-clic) su `Mandelbrot.app` → **Apri** → **Apri**.
+> In alternativa da terminale: `xattr -cr /Applications/Mandelbrot.app`.
 
 ## Motivazioni
 

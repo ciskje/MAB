@@ -232,6 +232,12 @@ Sotto solo scarti + gotcha API.
 - `_submit`: `self._gen += 1; _GEN[0] = self._gen` (`_GEN` =
   `np.zeros(1, int32)`); worker scarta il frame se `_GEN[0] != gen` prima di
   `frames.put` (mostrato poi da `_poll`).
+- Cursore `watch` durante il render interattivo (`_worker_loop`), tolto in
+  `_show()`; se il frame e' scartato come obsoleto il watch si toglie solo
+  se non c'e' lavoro piu' nuovo in coda (v7.1.4: prima restava appeso).
+  Il watch va su root + canvas (`_busy_on`/`_busy_off`, v7.1.5): su macOS
+  il cursore del solo toplevel non si propaga al canvas sotto il puntatore
+  (invisibile durante il render, poi appeso fino al primo movimento).
 - Cancellazione cooperativa solo CPU: Numba ogni banda (16 bande totali,
   `band = ceil(h/16)`; check Python tra bande — check in-kernel inaffidabile
   per hoisting in `prange`, §12.4); fallback numpy ogni iterazione.
@@ -258,6 +264,7 @@ Sotto solo scarti + gotcha API.
   `Iterazioni:` / `Iterazioni (auto):`, entry (largh. 7, allineata a destra),
   `-1000`/`+1000`, `Ricalcola` + dropdown scala `1x1`/`2x2`/`4x4`/`8x8`
   (default `1x1`), `Benchmark`, `Reset`. Poi canvas, poi status bar.
+  Il cambio motore riporta la scala antialias a `1x1` (v7.1.4).
   Font `TkDefaultFont/TkTextFont/TkMenuFont` 13 pt.
    Menu File: `Salva immagine... (Ctrl+S)`, `Carica zona...`, `Salva zona`,
    `Salva zona con nome...`, separatore, `Esci`.
@@ -399,6 +406,9 @@ CUDA (solo per CUDA; Vulkan bundled).
 |---|---|---|---|
 | Windows | `mandelbrot_dist/Mandelbrot/Mandelbrot.exe` + `_internal/` | `dist/Mandelbrot-v<ver>-win64.zip` | Vulkan bundled; CUDA solo con driver+runtime utente (cuda-pathfinder: `CUDA_PATH`/PATH/Program Files) |
 | macOS | `mandelbrot_dist/Mandelbrot.app` (firma ad-hoc) | `dist/Mandelbrot-v<ver>-macos.dmg` (staging `mandelbrot_dmg` + link `/Applications`, `hdiutil UDZO`) | Metal + Vulkan bundled |
+- Primo avvio su macOS: firma ad-hoc non notarizzata → Gatekeeper blocca;
+  tasto destro (Ctrl-clic) su `Mandelbrot.app` → Apri → Apri, oppure
+  `xattr -cr /Applications/Mandelbrot.app` (nota anche nel README).
 
 - Script unico `build_app.py`: icona → PyInstaller (`mandelbrot.spec`,
   `--workpath mandelbrot_build` + `--distpath mandelbrot_dist` in temp) →

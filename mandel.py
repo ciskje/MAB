@@ -1,12 +1,18 @@
 # ============================================================================
 # Insieme di Mandelbrot - visualizzatore interattivo
-# VERSIONE: 7.1.3
+# VERSIONE: 7.1.5
 # ----------------------------------------------------------------------------
 # Shim di compatibilita': il programma vive nel pacchetto mandelbrot/
 # (config/palette/state/mem/cuda/metal/vulkan/cpu/engine/app).
 # STORICO completo: git log --oneline. Ultime 10 voci in mandelbrot/__init__.py
 # (HISTORY, letta da Help -> Novita` recenti...).
 #
+# 7.1.5 - 2026-09-04
+#   - Cursore wait su root+canvas (su macOS il solo root non si vedeva
+#     sul canvas e restava appeso fino al movimento del mouse).
+# 7.1.4 - 2026-09-04
+#   - Cursore wait sempre ripristinato (anche su frame scartati);
+#     cambio motore riporta l'antialias a 1x1; nota README macOS.
 # 7.1.3 - 2026-09-04
 #   - Storici benchmark GPU aggiornati ai valori verificati in Esperta.
 # 7.1.2 - 2026-09-04
