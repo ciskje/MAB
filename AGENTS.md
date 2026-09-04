@@ -53,11 +53,13 @@ README per le release (istruzione permanente): a ogni bump di versione
 aggiornare in `README.md` il numero nel titolo e, se si pubblica una
 Release, i link della sezione Download
 (`.../releases/download/<tag>/<file>` per piattaforma).
-Su "builda" (istruzione permanente), in quest'ordine: prima commit dei
-sorgenti pendenti (così la Release corrisponde sempre a un commit
-esistente), poi `python build_app.py` + smoke EXE, poi aggiornamento
-Release GitHub (sostituire l'asset con lo zip fresco) e allineamento
-`README.md` (numero titolo + link Download, secondo commit).
+Su "builda" (istruzione permanente): prima commit dei sorgenti pendenti
+(così la build corrisponde sempre a un commit esistente), poi
+`python build_app.py` + smoke EXE. E basta.
+Su "pusha" (istruzione permanente): commit di eventuali pendenti, poi
+controllo quali dmg/zip in `dist/` mancano su GitHub (Release per tag),
+aggiornamento Release (crea o sostituisci asset) + allineamento `README.md`
+(numero titolo + link Download), poi push.
 Dettaglio tecnico: `spec.md` §11.
 
 ## 4. Note operative
