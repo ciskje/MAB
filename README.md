@@ -1,6 +1,4 @@
-# MAB - Mandelbrot Ai benchmark per LLM agentica (con visualizzatore interattivo)
-
-Versione **7.1.3**
+# MAB - Mandelbrot Ai benchmark per LLM agentica — v7.1.3
 
 Questo repo è un **benchmark per testare le capacità agentiche e di
 programmazione di una LLM** su un progetto software reale e vivo: un
@@ -23,7 +21,7 @@ locale (vedi sotto): specifica e codice evolvono insieme, ogni versione è
 verificata bit-identica prima del commit.
 
 ![Python](https://img.shields.io/badge/python-3.14-blue)
-![Licenza](https://img.shields.io/badge/licenza-vedi_riga_sotto-lightgrey)
+[![Licenza: MIT](https://img.shields.io/badge/Licenza-MIT-yellow.svg)](LICENSE)
 
 ## Funzioni
 
@@ -86,4 +84,5 @@ progetto reale (refactor, bugfix verificati, bump di versione disciplinati).
 | `build_app.py` / `mandelbrot.spec` / `hook_dlldir.py` | build PyInstaller |
 | `make_icon.py` | genera l'icona dell'app dal motore CPU |
 
-Versione corrente: **7.1.3** 
+Versione corrente: vedi titolo in cima (fonte di verità: `VERSION` in
+`mandelbrot/__init__.py`).
