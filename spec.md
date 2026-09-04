@@ -334,8 +334,12 @@ Sotto solo scarti + gotcha API.
   `Carica zona...`.
 
 ## 10. Benchmark
-- Dialog conferma custom (`Toplevel` modale centrato, Avvia/Annulla,
-  `Return`/`Esc`); poi thread dedicato per `secs`.
+- Dialog conferma custom (`Toplevel` modale centrato, radio Standard/Esperta,
+  Avvia/Annulla, `Return`/`Esc`); poi thread dedicato.
+  Standard = 1 prova da `secs`; Esperta (v7.1.0) = 3 prove da `secs` di cui
+  vale la migliore tra quelle completate (status `prova i/3...`); errore ->
+  stop, il risultato resta il migliore ottenuto (dialog FALLITO solo se tutto
+  fallito). GPU in esclusiva per tutta la durata (24 s in esperta).
 - Default (in `config.json` chiave `bench`, overridibile; vecchia `bench.mi`
   ignorata):
 
@@ -352,8 +356,21 @@ Sotto solo scarti + gotcha API.
    a parita' di selezione); se il device e' occupato/in reset il dialog
    FALLITO lo segnala con hint (riprovare o riavviare).
 - Report: dialog con `rendering/s` grande (42 pt, `#2ea44f`), statistiche
-  (n. rendering, ms/render), grafico + griglia parametri (riga `Hardware` da
-  `hw_name()`); errore → `BENCHMARK FALLITO` + dettaglio (`#e5534b`).
+  (n. rendering, ms/render; in esperta `migliore di 3 prove da 8 s`), codice
+  di sicurezza a 64 bit (16 hex in gruppi da 4, Consolas 14 bold), grafico +
+  griglia parametri (riga `Hardware` da `hw_name()` + riga `Modalità`);
+  errore → `BENCHMARK FALLITO` + dettaglio (`#e5534b`).
+- Codice di sicurezza (v7.1.0, `mandelbrot/expert.py`, tamper-evident NON
+  anti-forgery: app open-source/offline, chi ricalcola il codice col
+  programma modificato non e' rilevabile; il ritocco dello screenshot si'):
+  24 bit rps (centesimi) + 16 bit impronta hw (SHA256 del nome normalizzato:
+  minuscole, spazi compattati) + 24 bit checksum SHA256 su
+  `rps|hw|backend|prec|versione|mi|secs`. Nessun segreto incorporato.
+- Verifica (Help > `Verifica benchmark...`): dialog con codice + nome hw
+  digitato (letto dallo screenshot) + resto dei campi (precompilati coi
+  default); ricalcolo e verdetto `OK` / `HW DIVERSO` (nome errato o altra
+  macchina) / `MANOMESSO` (checksum fallito) / `FORMATO INVALIDO`, con rps
+  decodificato e dettaglio.
 
 | barra | valore (rendering/s) | stile |
 |---|---|---|

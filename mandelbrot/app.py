@@ -30,6 +30,7 @@ from .cuda import (set_cuda_device, set_cuda_split, _cuda_split_devs,
     _cuda_short_name, _cuda_label)
 from .vulkan import set_vulkan_adapter, _vulkan_short_name, _vulkan_label
 from .cpu import _numba_diag
+from .expert import make_code, verify_code, fmt_code
 
 class MandelbrotApp:
     # ---------------- Costruzione UI ----------------
@@ -178,6 +179,7 @@ class MandelbrotApp:
         self.mhelp = tk.Menu(self.menu, tearoff=0)
         self.mhelp.add_command(label="Istruzioni...", command=self.show_help)
         self.mhelp.add_command(label="Novità recenti...", command=self.show_recent)
+        self.mhelp.add_command(label="Verifica benchmark...", command=self.show_verify)
         self.mhelp.add_separator()
         self.mhelp.add_command(label="Informazioni...", command=self.show_about)
         self.menu.add_cascade(label="Help", menu=self.mhelp)
@@ -225,7 +227,12 @@ class MandelbrotApp:
             "molto piu' lenti; se VRAM/RAM libere non bastano vengono "
             "rifiutati); "
             "Benchmark esegue "
-            "il test standardizzato di 8 s nella vista corrente."
+            "il test standardizzato di 8 s nella vista corrente (Standard), "
+            "oppure 3 prove da 8 s di cui vale la migliore (Esperta). Il "
+            "risultato mostra un codice di sicurezza a 64 bit che lega "
+            "rendering/s + hardware + resto dei campi: smaschera il ritocco "
+            "dello screenshot (Help > Verifica benchmark... per "
+            "controllarlo)."
         )
         tk.Label(body, text=text, wraplength=460, justify="left").pack(anchor="w", pady=(8, 0))
         def chiudi(_e=None):
@@ -285,6 +292,72 @@ class MandelbrotApp:
             win.destroy()
         tk.Button(win, text="Chiudi", command=chiudi).pack(pady=(18, 20))
         win.bind("<Return>", chiudi)
+        self._modal(win)
+
+    def show_verify(self):
+        # v7.1.0: verifica del codice di sicurezza di un benchmark (Help ->
+        # Verifica benchmark...). L'utente digita codice + nome hardware letto
+        # dallo screenshot (+ resto dei campi, precompilati coi default): il
+        # codice viene ricalcolato e confrontato. Solo decodifica+confronto,
+        # niente rete. Limite onesto: non ferma chi ricalcola il codice col
+        # programma modificato (open-source, offline), ma smaschera qualunque
+        # ritocco delle cifre nello screenshot.
+        win = tk.Toplevel(self.root)
+        win.title("Verifica benchmark")
+        win.resizable(False, False)
+        body = tk.Frame(win, padx=26, pady=20)
+        body.pack(fill="both", expand=True)
+        tk.Label(body, text="Verifica codice di sicurezza",
+                 font=("Segoe UI", 14, "bold"),
+                 foreground=_backend_fg()).pack(anchor="w")
+        tk.Label(body, text="Digita codice e dati letti dallo screenshot:",
+                 wraplength=460, justify="left").pack(anchor="w", pady=(6, 10))
+        b = self.bench
+        fields = {}
+        grid = tk.Frame(body)
+        grid.pack(fill="x")
+        def _row(i, label, default, width=34):
+            tk.Label(grid, text=label, width=16, anchor="w").grid(
+                row=i, column=0, sticky="w", pady=3)
+            e = tk.Entry(grid, width=width, font=("Consolas", 11))
+            e.insert(0, default)
+            e.grid(row=i, column=1, sticky="w", padx=(10, 0), pady=3)
+            fields[label] = e
+        _row(0, "Codice", "")
+        _row(1, "Hardware", hw_name(), width=34)
+        _row(2, "Motore", backend())
+        _row(3, "Precisione", S._PREC, width=10)
+        _row(4, "Versione", VERSION, width=10)
+        _row(5, "Iterazioni", str(auto_mi(b["half"])), width=10)
+        _row(6, "Secondi", str(float(b["secs"])), width=10)
+        out = tk.Label(body, text="", wraplength=460, justify="left",
+                       font=("Segoe UI", 12, "bold"))
+        out.pack(anchor="w", pady=(14, 0))
+        det = tk.Label(body, text="", wraplength=460, justify="left")
+        det.pack(anchor="w")
+        def verifica(_e=None):
+            v, rps, msg = verify_code(fields["Codice"].get(),
+                                      fields["Hardware"].get(),
+                                      fields["Motore"].get(),
+                                      fields["Precisione"].get(),
+                                      fields["Versione"].get(),
+                                      fields["Iterazioni"].get(),
+                                      fields["Secondi"].get())
+            col = {"OK": "#2ea44f", "HW DIVERSO": "#d97706",
+                   "MANOMESSO": "#e5534b",
+                   "FORMATO INVALIDO": "#e5534b"}.get(v, "#e5534b")
+            if rps is None:
+                out.config(text=v, foreground=col)
+            else:
+                out.config(text=f"{v} \u2014 {rps:.2f} rendering/s", foreground=col)
+            det.config(text=msg)
+        btns = tk.Frame(win)
+        btns.pack(fill="x", padx=26, pady=(16, 20))
+        tk.Button(btns, text="Verifica", command=verifica).pack(side="right")
+        tk.Button(btns, text="Chiudi",
+                  command=lambda: (setattr(win, "_annullato", False),
+                                   win.destroy())).pack(side="right", padx=(0, 10))
+        win.bind("<Return>", verifica)
         self._modal(win)
 
     def _bind_events(self):
@@ -1036,10 +1109,10 @@ class MandelbrotApp:
         self.root.destroy()
 
     # ---------------- Benchmark ----------------
-    def _bench_rows(self):
+    def _bench_rows(self, mode=None):
         b = self.bench
         mi = auto_mi(b["half"])
-        return [
+        rows = [
             ("Regione", f"c = ({b['cx']}, {b['cy']}i)"),
             ("Met\u00e0 lato", f"{b['half']:.3e}"),
             ("Iterazioni", f"{mi}\u00a0 (formula auto)"),
@@ -1048,6 +1121,11 @@ class MandelbrotApp:
             ("Hardware", hw_name()),
             ("Durata", f"{b['secs']:.0f} s"),
         ]
+        if mode == "esperto":
+            rows.append(("Modalit\u00e0", "Esperta: 3 \u00d7 8 s, vale la migliore"))
+        elif mode == "standard":
+            rows.append(("Modalit\u00e0", "Standard: 8 s"))
+        return rows
 
     def _bench_chart(self, parent, rps):
         """Grafico a barre orizzontali del benchmark: i riferimenti storici
@@ -1122,7 +1200,7 @@ class MandelbrotApp:
         return not win._annullato
 
     def _bench_ask(self):
-        """Dialog di conferma personalizzato: True se avviare."""
+        """Dialog di conferma personalizzato: 'standard'/'esperto' o None."""
         win = tk.Toplevel(self.root)
         win.title("Benchmark Mandelbrot")
         win.resizable(False, False)
@@ -1138,11 +1216,17 @@ class MandelbrotApp:
             tk.Label(rows, text=v, anchor="e",
                      font=("Consolas", 12)).grid(row=i, column=1, sticky="e",
                                                   padx=(18, 0), pady=3)
+        mode_var = tk.StringVar(value="standard")
+        tk.Radiobutton(body, text="Standard: 1 prova da 8 s",
+                       variable=mode_var, value="standard").pack(anchor="w", pady=(12, 0))
+        tk.Radiobutton(body, text="Esperta: 3 prove da 8 s, vale la migliore",
+                       variable=mode_var, value="esperto").pack(anchor="w")
         btns = tk.Frame(win)
         btns.pack(fill="x", padx=26, pady=(16, 18))
 
         def go(_e=None):
             win._annullato = False
+            win._mode = mode_var.get()
             win.destroy()
         def cancel(_e=None):
             win._annullato = True
@@ -1153,7 +1237,9 @@ class MandelbrotApp:
         avvia.pack(side="right", padx=(0, 10))
         win.bind("<Return>", go)
         avvia.focus_set()
-        return self._modal(win)
+        if not self._modal(win):
+            return None
+        return getattr(win, "_mode", "standard")
 
     def _bench_result_dialog(self, count, secs, err):
         """Dialog risultato: rendering/s grande e evidente come vero risultato."""
@@ -1164,6 +1250,7 @@ class MandelbrotApp:
         body.pack(fill="both", expand=True)
         tk.Label(body, text="Risultato",
                  font=("Segoe UI", 14, "bold")).pack(anchor="w")
+        mode = getattr(self, "_bench_mode", "standard")
         if count > 0:
             tk.Frame(body, bg="#8a8a8a", height=1).pack(fill="x", pady=(10, 0))
             tk.Label(body, text=f"{count/secs:.2f}",
@@ -1173,7 +1260,19 @@ class MandelbrotApp:
                      font=("Segoe UI", 13, "bold"),
                      foreground="#2ea44f").pack(pady=(0, 8))
             tk.Label(body, text=f"{count} rendering in {secs:.1f} s   \u00b7   {secs/count*1000:.0f} ms ciascuno",
-            ).pack(pady=(0, 16))
+            ).pack(pady=(0, 8))
+            if mode == "esperto":
+                tk.Label(body, text="migliore di 3 prove da 8 s",
+                         font=("Segoe UI", 11, "italic")).pack(pady=(0, 8))
+            # v7.1.0: codice di sicurezza (tamper-evident): lega rps +
+            # hardware + resto dei campi; verificabile in Help > Verifica.
+            b = self.bench
+            code = make_code(count / secs, hw_name(), backend(), S._PREC,
+                             VERSION, auto_mi(b["half"]), b["secs"])
+            tk.Label(body, text="Codice di sicurezza:",
+                     ).pack(anchor="w", pady=(0, 2))
+            tk.Label(body, text=fmt_code(code),
+                     font=("Consolas", 14, "bold")).pack(anchor="w", pady=(0, 16))
             tk.Label(body, text="Confronto coi riferimenti storici (rendering/s):",
                      ).pack(anchor="w", pady=(0, 4))
             self._bench_chart(body, count / secs).pack(anchor="w", pady=(2, 14))
@@ -1193,7 +1292,7 @@ class MandelbrotApp:
         tk.Label(body, text="Parametri del test:").pack(anchor="w", pady=(0, 4))
         rows = tk.Frame(body)
         rows.pack(fill="x", anchor="w")
-        for i, (k, v) in enumerate(self._bench_rows()):
+        for i, (k, v) in enumerate(self._bench_rows(mode=mode)):
             tk.Label(rows, text=k, width=12, anchor="w").grid(row=i, column=0, sticky="w", pady=2)
             tk.Label(rows, text=v, anchor="e",
                      font=("Consolas", 11)).grid(row=i, column=1, sticky="e",
@@ -1209,9 +1308,11 @@ class MandelbrotApp:
         if getattr(self, "_bench_running", False):
             self.status.config(text="benchmark gia' in corso")
             return
-        if not self._bench_ask():
+        mode = self._bench_ask()
+        if mode is None:
             self.status.config(text="benchmark annullato")
             return
+        self._bench_mode = mode
         # v6.1.1: mai in contesa col ricalcolo NxN sullo stesso device
         # (un kernel gigante in parallelo al bench crollava il conteggio).
         # Se una foto e' in corso, il bench parte accodato a fine ricalcolo.
@@ -1235,7 +1336,9 @@ class MandelbrotApp:
             self._full_timer = None
         self._bench_running = True
         self.root.config(cursor="watch")
-        self.status.config(text=f"benchmark in corso ({self.bench['secs']:.0f} s)...")
+        _n = 3 if getattr(self, "_bench_mode", "standard") == "esperto" else 1
+        self.status.config(text=f"benchmark in corso ({self.bench['secs']:.0f} s"
+                                + (f" \u00d7 {_n}..." if _n > 1 else "...") + ")")
         threading.Thread(target=self._bench_worker, daemon=True).start()
 
     def _bench_worker(self):
@@ -1258,16 +1361,35 @@ class MandelbrotApp:
         def render():
             return compute(b["cx"], b["cy"], b["half"], b["w"], b["h"], mi,
                            buf=bench_buf)
-        t_end = time.perf_counter() + b["secs"]
-        count = 0
+        # v7.1.0 (esperto): N prove da b['secs'] s, vale la migliore tra
+        # quelle completate; errore -> stop (il device e' probabilmente
+        # occupato/in reset, riprovare non serve).
+        runs = 3 if getattr(self, "_bench_mode", "standard") == "esperto" else 1
+        best = 0
         err = None
-        while time.perf_counter() < t_end:
-            try:
-                render()
-                count += 1
-            except Exception as ex:
-                err = str(ex)
+        for run in range(runs):
+            if runs > 1:
+                self.root.after(0, lambda r=run: self.status.config(
+                    text=f"benchmark esperto in corso (prova {r + 1}/{runs})..."))
+            t_end = time.perf_counter() + b["secs"]
+            count = 0
+            ok = True
+            while time.perf_counter() < t_end:
+                try:
+                    render()
+                    count += 1
+                except Exception as ex:
+                    err = str(ex)
+                    ok = False
+                    break
+            if count > best:
+                best = count  # anche parziale (come prima: il dialog mostra
+                # il risultato se count > 0, l'errore solo se tutto fallito)
+            if not ok:
                 break
+        count = best
+        if count == 0 and err is None:
+            err = "nessun rendering completato"
         # thread-safe: il thread principale (in _poll) rileva il flag e mostra il risultato
         self._bench_result = (count, b["secs"], err)
         self._bench_finished = True
