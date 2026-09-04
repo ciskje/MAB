@@ -47,9 +47,9 @@ Note: intermedie (`mandelbrot_build`) e app stanno in temp utente (il progetto
 può stare su share lenta); Vulkan bundled out-of-the-box, CUDA richiede
 driver + runtime utente (cuda-pathfinder); ritenzione `KEEP_N = 3` versioni
 per piattaforma in `dist/` (rimozione automatica delle più vecchie).
-Ordine: modifica → versione+STORICO+spec (§2) → verifica →
-`git commit` automatico (a ogni salto di versione l'agente committa
-da solo, senza chiedere; messaggio `vX.Y.Z: descrizione`).
+Ordine: modifica → versione+STORICO+spec (§2) → verifica.
+Commit e push su GitHub SOLO su richiesta esplicita dell'utente, mai in
+automatico (istruzione permanente: niente commit/push di iniziativa).
 La build con `python build_app.py` avviene solo su richiesta esplicita,
 fuori dall'ordine automatico.
 Dettaglio tecnico: `spec.md` §11.

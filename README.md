@@ -1,10 +1,14 @@
-# Insieme di Mandelbrot — visualizzatore interattivo
+# MAB - Mandelbrot Ai benchmark per LLM agentica (con visualizzatore interattivo)
 
 Versione **7.1.3**
 
-Visualizzatore interattivo dell'insieme di Mandelbrot (Python + Tkinter)
-con 4 backend di rendering selezionabili a runtime e fallback automatico
-sulla CPU.
+Questo repo è un **benchmark per testare le capacità agentiche e di
+programmazione di una LLM** su un progetto software reale e vivo: un
+visualizzatore interattivo dell'insieme di Mandelbrot (Python + Tkinter)
+con 4 motori di rendering selezionabili a runtime (CPU, CUDA, Vulkan, Metal) e fallback automatico
+sulla CPU. La LLM lavora qui come sviluppatore: implementa funzioni,
+corregge bug, fa refactor e rilascia versioni — il tutto verificato
+bit-identico prima di ogni commit (vedi sotto).
 
 ![Demo (palette termal, antialias 2x2)](demo.png)
 
@@ -82,6 +86,4 @@ progetto reale (refactor, bugfix verificati, bump di versione disciplinati).
 | `build_app.py` / `mandelbrot.spec` / `hook_dlldir.py` | build PyInstaller |
 | `make_icon.py` | genera l'icona dell'app dal motore CPU |
 
-Versione corrente: **7.1.3** (aggiornata a ogni release; fonte di verità:
-`VERSION` in `mandelbrot/__init__.py`, storico completo con
-`git log --oneline`).
+Versione corrente: **7.1.3** 
