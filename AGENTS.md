@@ -8,7 +8,7 @@ Git traccia solo i sorgenti; tutto il resto è generato o dato utente.
 | `mandelbrot/` | il programma (pacchetto: `config`/`palette`/`state`/`mem`/`cpu`/`cuda`/`metal`/`vulkan`/`engine`/`app`/`expert`; Tkinter + 4 backend con fallback CPU). Fonte di verità per versione (`__init__.py`: `VERSION` + `HISTORY` ultime 10) |
 | `mandel.py` | shim entry-point (re-export + `main()`); tiene l'header `# VERSIONE` letto da `mandelbrot.spec`/`build_app.py` e la compat `import mandel` di `make_icon.py` |
 | `spec.md` | specifica; resta in sync col sorgente (regola §2) |
-| `README.md` | pagina GitHub (titolo con versione, Download da Release) + `demo.png` |
+| `README.md` | pagina GitHub (titolo con versione, Download da Release) + `screenshot-*.png` |
 | `LICENSE` | MIT |
 | `build_app.py` | unico script di build (icona → PyInstaller → post); dettaglio in `spec.md` §11 |
 | `mandelbrot.spec` | ricetta PyInstaller multipiattaforma |

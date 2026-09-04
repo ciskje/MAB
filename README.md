@@ -8,7 +8,7 @@ sulla CPU. La LLM lavora qui come sviluppatore: implementa funzioni,
 corregge bug, fa refactor e rilascia versioni — il tutto verificato
 bit-identico prima di ogni commit (vedi sotto).
 
-![Demo (palette termal, antialias 2x2)](demo.png)
+![Interfaccia: deep-zoom palette fuoco, split CUDA su 2 GPU, antialias 8x8](screenshot-ui.png)
 
 ## Download
 
@@ -89,6 +89,14 @@ Il progetto è sviluppato anche e soprattutto con una AI locale (Qwen3.8
 sono tenuti aggiornati proprio per questo: dati in pasto a una LLM,
 permettono di testarne le capacità agentiche e di programmazione su un
 progetto reale (refactor, bugfix verificati, bump di versione disciplinati).
+
+## Schermate
+
+![Stessa vista in palette termal](screenshot-ui2.png)
+
+![Risultato benchmark Esperto: 372.25 rendering/s, codice di sicurezza e confronto storici](screenshot-benchmark.png)
+
+![Verifica del codice: esito OK con rps decodificato](screenshot-verifica-bench.png)
 
 ## Struttura
 
